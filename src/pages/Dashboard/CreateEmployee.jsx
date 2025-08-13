@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
 import axios from 'axios'; 
+import {  useNavigate } from 'react-router-dom';
 
-const CreateUser = () => {
+
+
+const CreateEmployee = () => {
+const navigate = useNavigate();
   const [formData, setFormData] = useState({
     name: '',
     DOB: '',
@@ -43,17 +47,23 @@ const CreateUser = () => {
 
   return (
     <div className="red-container">
-      <h2>Create Customer</h2>
+      <h2>Create Employee</h2>
       <form onSubmit={handleSubmit} className="red-form">
         <input type="text" name="name" placeholder="Name" value={formData.name} onChange={handleChange} required />
         <input type="date" name="DOB" placeholder="Date of Birth" value={formData.DOB} onChange={handleChange} />
         <input type="tel" name="phoneNumber" placeholder="Phone Number" value={formData.phoneNumber} onChange={handleChange} required />
         <input type="password" name="password" placeholder="Password" value={formData.password} onChange={handleChange} required />
         <input type="text" name="role" placeholder="Role" value={formData.role} onChange={handleChange} />
-        <button type="submit">Create Customer</button>
+        <button type="submit">Create Employee</button> 
+          <button 
+          onClick={() => navigate('/AdminDashboard/viewEmployees')}
+          style={{ backgroundColor: 'blue', color: 'white', padding: '10px 20px', border: 'none', cursor: 'pointer' }}
+        >
+          View Employees
+        </button>
       </form>
     </div>
   );
 };
 
-export default CreateUser;
+export default CreateEmployee;

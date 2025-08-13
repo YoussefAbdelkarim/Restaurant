@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import AssistantComponent from '../../components/AssistantComponent/AssistantComponent';
+// import AssistantComponent from '../../components/AssistantComponent/AssistantComponent';
 export default function AI() {
   const [text, setText] = useState('');
   const [reply, setReply] = useState('');
@@ -41,7 +41,7 @@ export default function AI() {
         </div>
       )}
 
-       <AssistantComponent /> 
+       {/* <AssistantComponent />  */}
     </div>
   );
 }
