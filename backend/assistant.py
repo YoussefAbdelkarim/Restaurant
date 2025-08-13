@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import requests
+import certifi
 from typing import List, Dict, Tuple, Set
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -21,7 +22,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
     gemini_model = "gemini-1.5-flash"  # Using the latest stable model
-    print("Google Gemini API configured successfully")
+    # print("Google Gemini API configured successfully")  # Commented out to avoid showing in user response
 else:
     print("Warning: GOOGLE_API_KEY not set, Gemini features will be disabled")
     gemini_model = None
@@ -81,21 +82,28 @@ def create_gemini_agent():
 try:
     mongo_uri = os.getenv("MONGO_URI")
     mongo_db_name = os.getenv("MONGO_DB")
-    
+
     if not mongo_uri:
         print("Warning: MONGO_URI not set, using default localhost")
         mongo_uri = "mongodb://localhost:27017"
-    
+
     if not mongo_db_name:
         print("Warning: MONGO_DB not set, using default database")
         mongo_db_name = "test"
-    
-    mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+
+    # Configure TLS/SSL for Atlas using certifi CA bundle to avoid CERTIFICATE_VERIFY_FAILED on Windows
+    mongo_kwargs = {"serverSelectionTimeoutMS": 5000}
+    if "mongodb.net" in mongo_uri or mongo_uri.startswith("mongodb+srv://"):
+        mongo_kwargs.update({
+            "tls": True,
+            "tlsCAFile": certifi.where(),
+        })
+
+    mongo_client = MongoClient(mongo_uri, **mongo_kwargs)
     # Test the connection
     mongo_client.admin.command('ping')
     db = mongo_client[mongo_db_name]
-    # print(f"SUCCESS: MongoDB connected to {mongo_db_name}")  # Commented out to avoid showing in user response
-    
+
 except Exception as e:
     print(f"ERROR: MongoDB connection failed: {e}")
     print("Running in offline mode - some features may be limited")
@@ -124,6 +132,21 @@ def get_ingredient_availability() -> Dict[str, int]:
 def is_restaurant_domain(text: str) -> bool:
     """Rudimentary domain guard: only allow restaurant-related topics"""
     text_lower = text.lower()
+    
+    # Check for any food/ingredient related patterns first
+    food_patterns = [
+        r"\b(how much|how many|do i have|do we have|in stock|available|left)\b",
+        r"\b(ingredient|ingredients|food|dish|meal|recipe)\b",
+        r"\b(cook|prepare|make|bake|fry|grill|boil)\b",
+        r"\b(restaurant|kitchen|menu|chef|cooking)\b"
+    ]
+    
+    # If any food pattern matches, it's restaurant-related
+    for pattern in food_patterns:
+        if re.search(pattern, text_lower):
+            return True
+    
+    # Also check for specific food keywords
     domain_keywords = [
         # food/dishes
         "recipe", "ingredients", "cook", "prepare", "dish", "menu",
@@ -137,7 +160,9 @@ def is_restaurant_domain(text: str) -> bool:
         "order", "orders", "kitchen", "ingredient", "items",
         # common supplies mentioned by staff
         "oil", "olive", "olive oil", "cheese", "mushroom", "mushrooms",
-        "cans", "buckets", "salt", "pepper"
+        "cans", "buckets", "salt", "pepper",
+        # additional food items
+        "sausage", "bacon", "tomato", "sauce", "patty", "cheeze"
     ]
     return any(word in text_lower for word in domain_keywords)
 
@@ -150,12 +175,17 @@ def classify_intent(text: str) -> str:
     if not is_restaurant_domain(text_lower):
         return "out_of_domain"
 
+    # Explicit requests to list ingredients/inventory
+    if (("ingredients" in text_lower and re.search(r"\b(list|show|display|all|database|db|my)\b", text_lower))
+        or re.search(r"\b(list|show|display)\b.*\bingredients?\b", text_lower)):
+        return "inventory_check"
+
     # Recipe/How-to queries (include singular/plural ingredient patterns)
     if re.search(r"\b(recipe|how to (make|cook|prepare)|how do i (make|cook|prepare)|ingredients?\s+(of|for)|give me the ingredients?\s+(of|for))\b", text_lower):
         return "recipe_request"
 
     # Inventory queries
-    if re.search(r"\b(stock|inventory|available|availability|have|need|how many|do we have|in stock|left|quantity|count|units?)\b", text_lower):
+    if re.search(r"\b(stock|inventory|available|availability|have|need|how many|do we have|in stock|left|quantity|count|units?|much)\b", text_lower):
         return "inventory_check"
 
     # Trending/recommendations
@@ -500,8 +530,14 @@ def analyze_inventory_query(user_text: str, inventory: Dict[str, int]) -> str:
         return "No inventory data available."
 
     text_lower = user_text.lower()
+    # Handle list-all ingredients requests (e.g., "give me the ingredients in my database")
+    if (("ingredients" in text_lower and re.search(r"\b(list|show|display|all|database|db|my)\b", text_lower))
+        or re.search(r"\b(list|show|display)\b.*\bingredients?\b", text_lower)):
+        parts = [f"{name}: {qty}" for name, qty in sorted(inventory.items(), key=lambda x: x[0])]
+        return " | ".join(parts) if parts else "No inventory data available."
+
     tokens = re.findall(r"[a-zA-Z]+", text_lower)
-    tokens = [t for t in tokens if t not in {"how", "to", "make", "cook", "prepare", "the", "a", "an", "and", "of", "for", "do", "we", "have", "any", "is", "there", "stock", "in", "our", "restaurant", "available", "availability", "left", "many", "quantity", "count", "units", "unit", "give", "me"}]
+    tokens = [t for t in tokens if t not in {"how", "to", "make", "cook", "prepare", "the", "a", "an", "and", "of", "for", "do", "we", "have", "any", "is", "there", "stock", "in", "our", "restaurant", "available", "availability", "left", "many", "quantity", "count", "units", "unit", "give", "me", "much", "do", "i"}]
 
     bigrams = _generate_ngrams(tokens, 2)
     candidate_terms: Set[str] = set(tokens) | bigrams
@@ -516,15 +552,32 @@ def analyze_inventory_query(user_text: str, inventory: Dict[str, int]) -> str:
 
     # Fuzzy match for remaining
     matched_keys = {k for k, _ in matched}
+    missing_ingredients = []
+    
     for term in candidate_terms:
+        if len(term) < 2:  # Skip very short terms
+            continue
         if any(term in k or k in term for k in matched_keys):
             continue
-        close = get_close_matches(term, inventory_keys, n=1, cutoff=0.82)
+        close = get_close_matches(term, inventory_keys, n=1, cutoff=0.6)
         if close:
             key = close[0]
             if key not in matched_keys:
                 matched.append((key, inventory[key]))
                 matched_keys.add(key)
+        else:
+            # If no match found, this might be a missing ingredient
+            if term not in [m[0] for m in matched] and len(term) >= 3:
+                missing_ingredients.append(term)
+
+    if not matched and candidate_terms:
+        # Check if any meaningful terms were mentioned but not found
+        meaningful_terms = [term for term in candidate_terms if len(term) >= 3]
+        if meaningful_terms:
+            if len(meaningful_terms) == 1:
+                return f"You don't have {meaningful_terms[0]} in your inventory."
+            else:
+                return f"You don't have {', '.join(meaningful_terms)} in your inventory."
 
     if not matched:
         # Provide a helpful hint if no terms matched
@@ -534,7 +587,16 @@ def analyze_inventory_query(user_text: str, inventory: Dict[str, int]) -> str:
 
     # Build concise response
     parts = [f"{name}: {qty}" for name, qty in matched]
-    return " | ".join(parts)
+    response = " | ".join(parts)
+    
+    # Add missing ingredients info if any
+    if missing_ingredients:
+        if len(missing_ingredients) == 1:
+            response += f" | You don't have {missing_ingredients[0]} in your inventory."
+        else:
+            response += f" | You don't have {', '.join(missing_ingredients)} in your inventory."
+    
+    return response
 
 # --- Enhanced Gemini-Powered Functions ---
 async def get_recipe_with_gemini(dish: str, user_text: str, inventory: Dict[str, int]) -> str:
@@ -569,7 +631,7 @@ async def get_recipe_with_gemini(dish: str, user_text: str, inventory: Dict[str,
         """)
         
         # Get response from Gemini
-        result = agent.run_sync(prompt, output_type=RecipeRequest)
+        result = await agent.run(prompt, output_type=RecipeRequest)
         
         # Format the response
         recipe_response = f"""
@@ -620,7 +682,7 @@ async def analyze_inventory_with_gemini(user_text: str, inventory: Dict[str, int
         Focus on being helpful and actionable.
         """)
         
-        result = agent.run_sync(prompt, output_type=InventoryCheck)
+        result = await agent.run(prompt, output_type=InventoryCheck)
         
         # Format the response
         response_parts = []
@@ -668,7 +730,7 @@ async def get_trending_analysis_with_gemini() -> str:
         Make your analysis professional and actionable for restaurant management.
         """)
         
-        result = agent.run_sync(prompt, output_type=TrendingAnalysis)
+        result = await agent.run(prompt, output_type=TrendingAnalysis)
         
         # Format the response
         trending_response = f"""
@@ -720,18 +782,18 @@ async def restaurant_agent(user_text: str, inventory: Dict[str, int], is_audio: 
     if intent == "recipe_request":
         if dish:
             log_query(user_text, dish)
-            # Use Gemini-enhanced recipe generation
-            return await get_recipe_with_gemini(dish, user_text, inventory)
+            # Use regular recipe generation (Gemini temporarily disabled)
+            return await get_recipe_with_fallback(dish, user_text, inventory)
         else:
             return "I'd be happy to help you with a recipe! Could you please specify what dish you'd like to make? For example: 'How to make lemon juice' or 'Recipe for pizza'."
     
     elif intent == "inventory_check":
-        # Use Gemini-enhanced inventory analysis
-        return await analyze_inventory_with_gemini(user_text, inventory)
+        # Use regular inventory analysis (Gemini temporarily disabled)
+        return analyze_inventory_query(user_text, inventory)
     
     elif intent == "trending_request":
-        # Use Gemini-enhanced trending analysis
-        return await get_trending_analysis_with_gemini()
+        # Use regular trending analysis (Gemini temporarily disabled)
+        return get_trending_recipes()
     
     elif intent == "general_query":
         return "I can help you with recipes, ingredient checks, and restaurant insights. What would you like to know?"
