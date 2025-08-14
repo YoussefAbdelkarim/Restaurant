@@ -2,11 +2,8 @@ const express = require("express");
 const router = express.Router();
 const { spawn } = require("child_process");
 const Ingredient = require("../models/Ingredient");
-const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-
-const upload = multer({ dest: "uploads/" });
 
 // Improved Python path detection
 function getPythonPath() {
@@ -104,65 +101,6 @@ router.post("/ask", async (req, res) => {
     console.error("Assistant error:", err);
     res.status(500).json({
       error: "Assistant failed",
-      details: err.message,
-    });
-  }
-});
-
-router.post("/audio", upload.single("audio"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No audio file uploaded" });
-    }
-
-    const filePath = path.resolve(req.file.path);
-
-    // Inventory is fetched live inside assistant.py, no need to write inventory.json here
-    // But if your Python script expects inventory.json, you can write it here
-    // For now, we assume direct DB access by Python
-
-    const python = spawn(pythonPath, [scriptPath, "--audio", filePath]);
-
-    let data = "";
-    let errorOutput = "";
-
-    python.stdout.on("data", (chunk) => {
-      data += chunk.toString();
-    });
-
-    python.stderr.on("data", (err) => {
-      errorOutput += err.toString();
-      console.error("Python stderr:", err.toString());
-    });
-
-    python.on("close", (code) => {
-      // Delete uploaded audio file after processing
-      fs.unlink(filePath, (err) => {
-        if (err) console.error("Failed to delete temp audio file:", err);
-      });
-
-      if (code !== 0 || errorOutput) {
-        console.error("Python audio process error output:", errorOutput);
-        return res.status(500).json({
-          error: "Python audio process failed",
-          code,
-          stderr: errorOutput.trim(),
-        });
-      }
-      res.json({ response: data.trim() });
-    });
-
-    python.on("error", (err) => {
-      console.error("Failed to start Python audio process:", err);
-      res.status(500).json({
-        error: "Failed to start Python audio process",
-        details: err.message,
-      });
-    });
-  } catch (err) {
-    console.error("Audio assistant error:", err);
-    res.status(500).json({
-      error: "Assistant audio processing failed",
       details: err.message,
     });
   }
