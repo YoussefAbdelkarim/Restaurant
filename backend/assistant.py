@@ -3,7 +3,7 @@ import json
 import asyncio
 import requests
 import certifi
-from typing import List, Dict, Tuple, Set
+from typing import List, Dict, Tuple, Set, Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
@@ -195,7 +195,7 @@ def classify_intent(text: str) -> str:
     return "general_query"
 
 def extract_dish_name(text: str) -> str:
-    """Extract dish name from user text"""
+    """Extract dish name from user text with enhanced flexibility for typos and variations"""
     text_lower = text.lower()
     
     # Look for patterns like "how to make X", "recipe for X", etc.
@@ -225,6 +225,49 @@ def extract_dish_name(text: str) -> str:
             return food
     
     return None
+
+def normalize_dish_name(dish: str) -> str:
+    """Normalize dish name by fixing common typos and variations"""
+    if not dish:
+        return ""
+    
+    # Common typos and variations
+    corrections = {
+        "pepperonni": "pepperoni",
+        "peperoni": "pepperoni",
+        "peperonni": "pepperoni",
+        "pepperoni": "pepperoni",
+        "margherita": "margherita",
+        "margarita": "margherita",
+        "margheritta": "margherita",
+        "omelet": "omelette",
+        "omelette": "omelette",
+        "sausage": "sausage",
+        "sausagee": "sausage",
+        "cheeze": "cheese",
+        "cheese": "cheese",
+        "mushroom": "mushroom",
+        "mushrooms": "mushroom",
+        "tomato": "tomato",
+        "tomatoes": "tomato",
+        "onion": "onion",
+        "onions": "onion",
+        "lettuce": "lettuce",
+        "pickle": "pickle",
+        "pickles": "pickle",
+        "ketchup": "ketchup",
+        "mustard": "mustard",
+        "mayo": "mayonnaise",
+        "mayonnaise": "mayonnaise"
+    }
+    
+    # Apply corrections
+    normalized = dish.lower().strip()
+    for typo, correct in corrections.items():
+        if typo in normalized:
+            normalized = normalized.replace(typo, correct)
+    
+    return normalized
 
 def find_closest_ingredient(name: str, inventory_keys: List[str]) -> str:
     """Find closest ingredient name in inventory"""
@@ -335,6 +378,127 @@ def web_search(query: str) -> str:
     
     print(f"DuckDuckGo search failed for: {query}")  # Debug log
     return None
+
+def search_themealdb_with_fallback(dish: str) -> Optional[str]:
+    """Enhanced search with multiple fallback strategies"""
+    if not dish:
+        return None
+    
+    # Normalize the dish name
+    normalized_dish = normalize_dish_name(dish)
+    print(f"Searching for: '{dish}' (normalized: '{normalized_dish}')")
+    
+    # Strategy 1: Direct search with original name
+    result = fetch_recipe_from_themealdb(dish)
+    if result:
+        print(f"Found recipe with original name: {dish}")
+        return result
+    
+    # Strategy 2: Search with normalized name
+    if normalized_dish != dish:
+        result = fetch_recipe_from_themealdb(normalized_dish)
+        if result:
+            print(f"Found recipe with normalized name: {normalized_dish}")
+            return result
+    
+    # Strategy 3: Try partial matches (e.g., "pepperoni pizza" -> search for "pizza")
+    # Extract the main dish type
+    main_dishes = ["pizza", "burger", "pasta", "salad", "soup", "cake", "bread", "curry", "steak", "chicken", "fish", "beef", "pork"]
+    
+    for main_dish in main_dishes:
+        if main_dish in normalized_dish:
+            print(f"Trying partial match with main dish: {main_dish}")
+            result = fetch_recipe_from_themealdb(main_dish)
+            if result:
+                print(f"Found recipe with partial match: {main_dish}")
+                return result
+    
+    # Strategy 4: Try common variations
+    variations = {
+        "pepperoni pizza": ["pizza", "margherita pizza"],
+        "cheese pizza": ["pizza", "margherita pizza"],
+        "mushroom pizza": ["pizza", "vegetarian pizza"],
+        "chicken curry": ["curry", "chicken"],
+        "beef burger": ["burger", "hamburger"],
+        "fish and chips": ["fish", "chips"],
+        "chicken soup": ["soup", "chicken"],
+        "caesar salad": ["salad", "caesar"],
+        "chocolate cake": ["cake", "chocolate"],
+        "garlic bread": ["bread", "garlic"]
+    }
+    
+    for variation, alternatives in variations.items():
+        if any(alt in normalized_dish for alt in alternatives):
+            for alt in alternatives:
+                print(f"Trying variation: {alt}")
+                result = fetch_recipe_from_themealdb(alt)
+                if result:
+                    print(f"Found recipe with variation: {alt}")
+                    return result
+    
+    print(f"No recipe found for: {dish}")
+    return None
+
+def fetch_recipe_from_themealdb(dish: str) -> Optional[str]:
+    """Fetch a structured recipe from TheMealDB (free API). Returns formatted text or None."""
+    try:
+        url = "https://www.themealdb.com/api/json/v1/1/search.php"
+        params = {"s": dish}
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        meals = data.get("meals")
+        if not meals:
+            return None
+
+        meal = meals[0]
+        name = meal.get("strMeal") or dish.title()
+        instructions_raw = meal.get("strInstructions") or ""
+
+        # Collect ingredients and measures
+        ingredients: List[str] = []
+        for i in range(1, 21):
+            ing = (meal.get(f"strIngredient{i}") or "").strip()
+            meas = (meal.get(f"strMeasure{i}") or "").strip()
+            if ing:
+                entry = f"{meas} {ing}".strip()
+                ingredients.append(entry)
+
+        # Build clean step list
+        steps: List[str] = []
+        text = instructions_raw.replace("\r", "\n")
+        # Split on newlines first, then further split long lines on sentences
+        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+        tmp_parts: List[str] = []
+        for ln in lines:
+            # Split on period followed by space or end
+            parts = re.split(r"\.(?:\s+|$)", ln)
+            for p in parts:
+                p = p.strip().strip(".-•‣")
+                if len(p) >= 2:
+                    tmp_parts.append(p)
+        # Normalize to numbered steps
+        for p in tmp_parts:
+            # Avoid duplicating numbers if present
+            p = re.sub(r"^\d+\)?\.?\s*", "", p)
+            steps.append(p)
+
+        # Format response
+        lines_out: List[str] = []
+        lines_out.append(f"{name} Recipe:")
+        if ingredients:
+            lines_out.append("\nIngredients:")
+            for ing_line in ingredients:
+                lines_out.append(f"- {ing_line}")
+        if steps:
+            lines_out.append("\nSteps:")
+            for idx, step in enumerate(steps, start=1):
+                lines_out.append(f"{idx}. {step}")
+
+        return "\n".join(lines_out).strip()
+    except Exception as e:
+        print(f"TheMealDB fetch failed: {e}")
+        return None
 
 def get_basic_recipe(dish: str) -> str:
     """Provide basic recipe information when web search fails"""
@@ -752,13 +916,17 @@ async def get_trending_analysis_with_gemini() -> str:
 async def get_recipe_with_fallback(dish: str, user_text: str, inventory: Dict[str, int]):
     """Get recipe with web search fallback"""
     
-    # Always search web first for recipes (prioritize web search for all dishes)
-    print(f"Searching web for recipe: {dish}")  # Debug log
+    # Try TheMealDB first for structured recipes
+    print(f"Checking TheMealDB for recipe: {dish}")
+    themeal_result = search_themealdb_with_fallback(dish)
+    if themeal_result:
+        availability_info = check_inventory_for_any_dish(dish, inventory)
+        return f"{themeal_result}\n\n{availability_info}"
+
+    # If TheMealDB didn't have it, try DuckDuckGo Instant Answers (best-effort)
+    print(f"TheMealDB not found for {dish}, trying DuckDuckGo")
     web_result = web_search(dish)
-    
     if web_result:
-        print(f"Web search successful for {dish}")  # Debug log
-        # Check ingredient availability
         availability_info = check_inventory_for_any_dish(dish, inventory)
         return f"{web_result}\n\n{availability_info}"
     
@@ -769,7 +937,7 @@ async def get_recipe_with_fallback(dish: str, user_text: str, inventory: Dict[st
     return f"{fallback_help}\n\n{availability_info}"
 
 # --- Main Logic ---
-async def restaurant_agent(user_text: str, inventory: Dict[str, int], is_audio: bool = False):
+async def restaurant_agent(user_text: str, inventory: Dict[str, int]):
     """Main restaurant agent function with Gemini AI enhancement"""
     
     intent = classify_intent(user_text)
@@ -801,10 +969,10 @@ async def restaurant_agent(user_text: str, inventory: Dict[str, int], is_audio: 
     # Default response
     return "I'm here to help with recipes and ingredient information. How can I assist you today?"
 
-async def assistant_query(input_data: str, inventory: Dict[str, int], is_audio=False):
+async def assistant_query(input_data: str, inventory: Dict[str, int]):
     """Main entry point for assistant queries"""
     try:
-        result = await restaurant_agent(input_data, inventory, is_audio)
+        result = await restaurant_agent(input_data, inventory)
         return result
     except Exception as e:
         print(f"Error in assistant_query: {e}")
@@ -817,12 +985,11 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Restaurant AI Assistant")
     parser.add_argument("text", help="User query text")
-    parser.add_argument("--audio", help="Audio file path")
     args = parser.parse_args()
     
     # Get inventory from MongoDB
     inventory = get_ingredient_availability()
     
     # Process the query
-    result = asyncio.run(assistant_query(args.text, inventory, is_audio=args.audio))
+    result = asyncio.run(assistant_query(args.text, inventory))
     print(result)
