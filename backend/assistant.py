@@ -3,993 +3,425 @@ import json
 import asyncio
 import requests
 import certifi
-from typing import List, Dict, Tuple, Set, Optional
+from typing import List, Dict, Optional
 from dotenv import load_dotenv
-from pydantic import BaseModel
-from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient
-from difflib import get_close_matches
 import re
+from difflib import get_close_matches
 import google.generativeai as genai
-from pydantic_ai import Agent, RunContext
+from pydantic import BaseModel
+from pydantic_ai import Agent
 from textwrap import dedent
+from datetime import datetime
 
-# Load env vars
-load_dotenv("../.env")  # Load from parent directory (root) since script runs from backend/
+# ---------------- CUSTOM JSON ENCODER ----------------
+def safe_json_dumps(obj, **kwargs):
+    """Safely serialize objects to JSON, handling datetime and other non-serializable types"""
+    class SafeEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            # Handle MongoDB ObjectId
+            if hasattr(obj, '__str__'):
+                return str(obj)
+            return super().default(obj)
+    
+    return json.dumps(obj, cls=SafeEncoder, **kwargs)
 
-# --- Google Gemini Configuration ---
+# ---------------- ENV & DB SETUP ----------------
+load_dotenv("../.env")
+
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-    gemini_model = "gemini-1.5-flash"  # Using the latest stable model
-    # print("Google Gemini API configured successfully")  # Commented out to avoid showing in user response
-else:
-    print("Warning: GOOGLE_API_KEY not set, Gemini features will be disabled")
-    gemini_model = None
+if not GOOGLE_API_KEY:
+    raise ValueError("Missing GOOGLE_API_KEY in environment")
+genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- Pydantic Models for Gemini Agent ---
-class RecipeRequest(BaseModel):
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_DB = os.getenv("MONGO_DB", "test")
+
+mongo_kwargs = {"serverSelectionTimeoutMS": 5000}
+if "mongodb.net" in MONGO_URI or MONGO_URI.startswith("mongodb+srv://"):
+    mongo_kwargs.update({"tls": True, "tlsCAFile": certifi.where()})
+
+db = MongoClient(MONGO_URI, **mongo_kwargs)[MONGO_DB]
+
+# ---------------- MODELS ----------------
+class RecipeModel(BaseModel):
     dish_name: str
     ingredients: List[str]
     instructions: str
-    cooking_time: str
-    difficulty: str
+    cooking_time: Optional[str] = None
+    difficulty: Optional[str] = None
 
-class InventoryCheck(BaseModel):
-    available_ingredients: List[str]
-    missing_ingredients: List[str]
-    low_stock_ingredients: List[str]
+class InventoryAnalysis(BaseModel):
+    available: List[str]
+    missing: List[str]
+    low_stock: List[str]
     summary: str
 
-class TrendingAnalysis(BaseModel):
-    popular_dishes: List[str]
-    trending_patterns: str
-    recommendations: str
+class LLMResponse(BaseModel):
+    answer: str
 
-# --- Gemini Agent Setup ---
-def create_gemini_agent():
-    """Create and configure the Gemini agent for restaurant queries"""
-    if not gemini_model:
-        return None
-    
-    system_prompt = dedent("""
-    You are an expert restaurant AI assistant specializing in:
-    1. Recipe creation and modification
-    2. Ingredient analysis and substitution
-    3. Cooking techniques and best practices
-    4. Restaurant inventory management
-    5. Food trends and recommendations
-    
-    Always provide accurate, helpful, and practical information.
-    When analyzing ingredients, be specific about quantities and alternatives.
-    For recipes, include clear step-by-step instructions.
-    When checking inventory, provide detailed availability status.
-    
-    Focus only on restaurant and food-related topics.
-    """)
-    
+# ---------------- SYSTEM PROMPT ----------------
+SYSTEM_PROMPT = dedent("""
+You are a professional restaurant AI assistant with access to the complete restaurant database.
+
+Rules:
+1. Answer questions related to ALL restaurant topics: recipes, dishes, drinks, ingredients, cooking methods, inventory, users, employees, orders, sales, profits, costs, and any other restaurant database data.
+2. If asked about a recipe or drink:
+   - ALWAYS provide the complete recipe first, regardless of ingredient availability.
+   - Include a full ingredients list with quantities and step-by-step cooking instructions.
+   - Make the recipe instructions clear and easy to follow.
+3. For inventory questions:
+   - ALWAYS include quantities for each ingredient mentioned.
+   - Show ONLY ingredients that are out of stock (0 units) or low in stock (1-2 units) when reporting issues.
+   - For general inventory queries, show all ingredients with their quantities.
+4. For database queries (users, orders, sales, profits, costs):
+   - Provide comprehensive information from the database.
+   - Include relevant statistics, summaries, and insights.
+   - Format data clearly and professionally.
+5. Format your response as:
+   - Main answer section
+   - Data/Statistics section (if applicable)
+   - Summary/recommendations
+6. Keep responses professional, clear, and well-structured. No emojis, no filler text.
+7. ALWAYS include quantities when discussing inventory items.
+""")
+
+# ---------------- UTILS ----------------
+def is_restaurant_query(text: str) -> bool:
+    keywords = [
+        "recipe", "ingredient", "cook", "prepare", "dish", "menu", "drink", "water",
+        "juice", "coffee", "tea", "inventory", "stock", "available", "burger", "pizza",
+        "pasta", "salad", "soup", "cake", "bread", "chicken", "beef", "fish", "rice", "fries",
+        "user", "employee", "order", "sale", "profit", "cost", "revenue", "statistic", "data",
+        "database", "report", "summary", "total", "count", "show", "list", "what", "how many"
+    ]
+    return any(word in text.lower() for word in keywords)
+
+def get_inventory() -> Dict[str, int]:
     try:
-        agent = Agent(
-            gemini_model,
-            system_prompt=system_prompt,
-        )
-        return agent
-    except Exception as e:
-        print(f"Failed to create Gemini agent: {e}")
-        return None
-
-# --- MongoDB Client ---
-try:
-    mongo_uri = os.getenv("MONGO_URI")
-    mongo_db_name = os.getenv("MONGO_DB")
-
-    if not mongo_uri:
-        print("Warning: MONGO_URI not set, using default localhost")
-        mongo_uri = "mongodb://localhost:27017"
-
-    if not mongo_db_name:
-        print("Warning: MONGO_DB not set, using default database")
-        mongo_db_name = "test"
-
-    # Configure TLS/SSL for Atlas using certifi CA bundle to avoid CERTIFICATE_VERIFY_FAILED on Windows
-    mongo_kwargs = {"serverSelectionTimeoutMS": 5000}
-    if "mongodb.net" in mongo_uri or mongo_uri.startswith("mongodb+srv://"):
-        mongo_kwargs.update({
-            "tls": True,
-            "tlsCAFile": certifi.where(),
-        })
-
-    mongo_client = MongoClient(mongo_uri, **mongo_kwargs)
-    # Test the connection
-    mongo_client.admin.command('ping')
-    db = mongo_client[mongo_db_name]
-
-except Exception as e:
-    print(f"ERROR: MongoDB connection failed: {e}")
-    print("Running in offline mode - some features may be limited")
-    db = None
-    mongo_client = None
-
-# --- Ingredient Availability Check ---
-def get_ingredient_availability() -> Dict[str, int]:
-    """Get current ingredient availability from MongoDB"""
-    if db is None:
-        return {}
-    
-    try:
-        collection = db["ingredients"]  # Your Ingredients collection
         inventory = {}
-        for doc in collection.find({}):
-            name = doc["name"].lower()
-            current_stock = doc.get("currentStock", 0)
-            inventory[name] = current_stock
+        for doc in db["ingredients"].find({}):
+            inventory[doc["name"].lower()] = doc.get("currentStock", 0)
         return inventory
     except Exception as e:
-        print(f"Error loading ingredients: {e}")
-        return {}
+        return {"error": f"Inventory fetch failed: {str(e)}"}
 
-# --- Domain Guard ---
-def is_restaurant_domain(text: str) -> bool:
-    """Rudimentary domain guard: only allow restaurant-related topics"""
-    text_lower = text.lower()
-    
-    # Check for any food/ingredient related patterns first
-    food_patterns = [
-        r"\b(how much|how many|do i have|do we have|in stock|available|left)\b",
-        r"\b(ingredient|ingredients|food|dish|meal|recipe)\b",
-        r"\b(cook|prepare|make|bake|fry|grill|boil)\b",
-        r"\b(restaurant|kitchen|menu|chef|cooking)\b"
-    ]
-    
-    # If any food pattern matches, it's restaurant-related
-    for pattern in food_patterns:
-        if re.search(pattern, text_lower):
-            return True
-    
-    # Also check for specific food keywords
-    domain_keywords = [
-        # food/dishes
-        "recipe", "ingredients", "cook", "prepare", "dish", "menu",
-        "burger", "pizza", "pasta", "salad", "soup", "cake", "bread",
-        "chicken", "beef", "pork", "fish", "rice", "fries", "sandwich",
-        "omelet", "omelette", "mushroom", "mushrooms",
-        # drinks
-        "drink", "juice", "water", "soda", "coffee", "tea",
-        # inventory/ops
-        "inventory", "stock", "available", "availability", "in stock",
-        "order", "orders", "kitchen", "ingredient", "items",
-        # common supplies mentioned by staff
-        "oil", "olive", "olive oil", "cheese", "mushroom", "mushrooms",
-        "cans", "buckets", "salt", "pepper",
-        # additional food items
-        "sausage", "bacon", "tomato", "sauce", "patty", "cheeze"
-    ]
-    return any(word in text_lower for word in domain_keywords)
-
-# --- Intent Classification ---
-def classify_intent(text: str) -> str:
-    """Classify user intent from text"""
-    text_lower = text.lower()
-
-    # Out-of-domain early exit
-    if not is_restaurant_domain(text_lower):
-        return "out_of_domain"
-
-    # Explicit requests to list ingredients/inventory
-    if (("ingredients" in text_lower and re.search(r"\b(list|show|display|all|database|db|my)\b", text_lower))
-        or re.search(r"\b(list|show|display)\b.*\bingredients?\b", text_lower)):
-        return "inventory_check"
-
-    # Recipe/How-to queries (include singular/plural ingredient patterns)
-    if re.search(r"\b(recipe|how to (make|cook|prepare)|how do i (make|cook|prepare)|ingredients?\s+(of|for)|give me the ingredients?\s+(of|for))\b", text_lower):
-        return "recipe_request"
-
-    # Inventory queries
-    if re.search(r"\b(stock|inventory|available|availability|have|need|how many|do we have|in stock|left|quantity|count|units?|much)\b", text_lower):
-        return "inventory_check"
-
-    # Trending/recommendations
-    if re.search(r"\b(trending|popular|recommend|suggestion)\b", text_lower):
-        return "trending_request"
-
-    return "general_query"
-
-def extract_dish_name(text: str) -> str:
-    """Extract dish name from user text with enhanced flexibility for typos and variations"""
-    text_lower = text.lower()
-    
-    # Look for patterns like "how to make X", "recipe for X", etc.
-    patterns = [
-        r"how to (?:make|cook|prepare)\s+([a-zA-Z\s]+)",
-        r"recipe for\s+([a-zA-Z\s]+)",
-        r"ingredients of\s+([a-zA-Z\s]+)",
-        r"ingredient of\s+([a-zA-Z\s]+)",
-        r"how to\s+([a-zA-Z\s]+)",
-        r"([a-zA-Z\s]+)\s+recipe",
-        r"ingredients for\s+([a-zA-Z\s]+)"
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text_lower)
-        if match:
-            dish_name = match.group(1).strip()
-            # remove trailing politeness or filler words
-            dish_name = re.sub(r"\b(please|thanks|thank you|ask)\b$", "", dish_name).strip()
-            if dish_name and len(dish_name) > 1:
-                return dish_name
-    
-    # If no pattern match, try to extract from common food words
-    food_words = ["lemon juice", "pizza", "pasta", "salad", "soup", "cake", "bread", "rice", "chicken", "fish", "beef", "pork", "burger", "mushroom salad"]
-    for food in food_words:
-        if food in text_lower:
-            return food
-    
-    return None
-
-def normalize_dish_name(dish: str) -> str:
-    """Normalize dish name by fixing common typos and variations"""
-    if not dish:
-        return ""
-    
-    # Common typos and variations
-    corrections = {
-        "pepperonni": "pepperoni",
-        "peperoni": "pepperoni",
-        "peperonni": "pepperoni",
-        "pepperoni": "pepperoni",
-        "margherita": "margherita",
-        "margarita": "margherita",
-        "margheritta": "margherita",
-        "omelet": "omelette",
-        "omelette": "omelette",
-        "sausage": "sausage",
-        "sausagee": "sausage",
-        "cheeze": "cheese",
-        "cheese": "cheese",
-        "mushroom": "mushroom",
-        "mushrooms": "mushroom",
-        "tomato": "tomato",
-        "tomatoes": "tomato",
-        "onion": "onion",
-        "onions": "onion",
-        "lettuce": "lettuce",
-        "pickle": "pickle",
-        "pickles": "pickle",
-        "ketchup": "ketchup",
-        "mustard": "mustard",
-        "mayo": "mayonnaise",
-        "mayonnaise": "mayonnaise"
-    }
-    
-    # Apply corrections
-    normalized = dish.lower().strip()
-    for typo, correct in corrections.items():
-        if typo in normalized:
-            normalized = normalized.replace(typo, correct)
-    
-    return normalized
-
-def find_closest_ingredient(name: str, inventory_keys: List[str]) -> str:
-    """Find closest ingredient name in inventory"""
-    if not inventory_keys:
-        return name
-    matches = get_close_matches(name, inventory_keys, n=1, cutoff=0.6)
-    return matches[0] if matches else name
-
-def check_inventory_availability(dish: str, inventory: Dict[str, int]) -> str:
-    """Check ingredient availability for a dish using common ingredient lists"""
-    if not inventory:
-        return "The inventory is currently empty."
-    return check_inventory_for_any_dish(dish, inventory)
-
-def get_trending_recipes() -> str:
-    """Get trending recipes based on recent queries"""
-    if db is None:
-        return "Trending data not available."
-    
+def get_users() -> List[Dict]:
     try:
-        trending = get_recent_trending(3)
-        if trending:
-            return f"Recent trending dishes: {', '.join(trending)}"
+        users = list(db["users"].find({}, {"_id": 0, "password": 0}))  # Exclude password
+        return users
+    except Exception as e:
+        return [{"error": f"Users fetch failed: {str(e)}"}]
+
+def get_orders() -> List[Dict]:
+    try:
+        orders = list(db["orders"].find({}, {"_id": 0}))
+        return orders
+    except Exception as e:
+        return [{"error": f"Orders fetch failed: {str(e)}"}]
+
+def get_items() -> List[Dict]:
+    try:
+        items = list(db["items"].find({}, {"_id": 0}))
+        return items
+    except Exception as e:
+        return [{"error": f"Items fetch failed: {str(e)}"}]
+
+def get_daily_sales() -> List[Dict]:
+    try:
+        sales = list(db["dailysales"].find({}, {"_id": 0}))
+        return sales
+    except Exception as e:
+        return [{"error": f"Daily sales fetch failed: {str(e)}"}]
+
+def get_restaurant_stats() -> Dict:
+    """Get comprehensive restaurant statistics"""
+    try:
+        stats = {}
+        
+        # Count totals
+        stats["total_users"] = db["users"].count_documents({})
+        stats["total_orders"] = db["orders"].count_documents({})
+        stats["total_items"] = db["items"].count_documents({})
+        stats["total_ingredients"] = db["ingredients"].count_documents({})
+        
+        # Calculate total revenue from orders
+        orders = list(db["orders"].find({}, {"totalAmount": 1}))
+        total_revenue = sum(order.get("totalAmount", 0) for order in orders)
+        stats["total_revenue"] = total_revenue
+        
+        # Calculate total cost from ingredients
+        ingredients = list(db["ingredients"].find({}, {"currentStock": 1, "costPerUnit": 1}))
+        total_cost = sum(ing.get("currentStock", 0) * ing.get("costPerUnit", 0) for ing in ingredients)
+        stats["total_inventory_cost"] = total_cost
+        
+        # Calculate profit
+        stats["total_profit"] = total_revenue - total_cost
+        
+        # Get recent orders (last 10)
+        recent_orders = list(db["orders"].find({}, {"_id": 0, "orderDate": 1, "totalAmount": 1, "status": 1}).sort("orderDate", -1).limit(10))
+        stats["recent_orders"] = recent_orders
+        
+        return stats
+    except Exception as e:
+        return {"error": f"Statistics calculation failed: {str(e)}"}
+
+def find_closest(name: str, keys: List[str]) -> Optional[str]:
+    matches = get_close_matches(name.lower(), keys, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+def analyze_inventory(ingredients: List[str], inventory: Dict[str, int]) -> InventoryAnalysis:
+    available, missing, low_stock = [], [], []
+    for ing in ingredients:
+        closest = find_closest(ing, list(inventory.keys()))
+        if closest and inventory.get(closest, 0) > 0:
+            available.append(f"{closest} ({inventory[closest]})")
+            if inventory[closest] <= 2:
+                low_stock.append(closest)
         else:
-            return "No trending data available yet."
-    except Exception as e:
-        return "Unable to fetch trending data."
+            missing.append(ing)
+    summary = (
+        "All ingredients available." if not missing else
+        f"Missing: {', '.join(missing)}"
+    )
+    return InventoryAnalysis(available=available, missing=missing, low_stock=low_stock, summary=summary)
 
-def log_query(user_text: str, dish_name: str):
-    """Log user queries for analytics"""
-    if db is not None:
-        try:
-            db["query_logs"].insert_one({
-                "user_query": user_text,
-                "dish_mentioned": dish_name,
-                "timestamp": datetime.now(timezone.utc)
-            })
-        except Exception as e:
-            print(f"Failed to log query: {e}")
-
-def get_recent_trending(days=3):
-    """Get recent trending dishes"""
-    if db is None:
+def extract_ingredients_from_text(text: str) -> List[str]:
+    if not text:
         return []
-    
-    try:
-        since = datetime.now(timezone.utc) - timedelta(days=days)
-        pipeline = [
-            {"$match": {"timestamp": {"$gte": since}}},
-            {"$group": {"_id": "$dish_mentioned", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}}, {"$limit": 3}
-        ]
-        return [f"{r['_id']} ({r['count']} requests)" for r in db["query_logs"].aggregate(pipeline)]
-    except Exception as e:
-        print(f"Error getting trending: {e}")
-        return []
+    lines = re.split(r"\n|;|-|\u2022", text)
+    candidates = []
+    pattern = re.compile(
+        r"(?:(?:\d+\/\d+|\d+)\s*(?:g|kg|ml|l|cup|cups|tbsp|tsp|tablespoon|teaspoon|oz|ounce|lb|pound)?)\s*([A-Za-z][A-Za-z0-9\s\-,()]+)",
+        re.I
+    )
+    fallback_words = r"\b(salt|pepper|onion|garlic|tomato|cheese|egg|eggs|flour|water|oil|butter|milk|sugar|lemon|vinegar|rice|pasta|bun|buns)\b"
+    for ln in lines:
+        ln_clean = ln.strip()
+        if not ln_clean or len(ln_clean) < 3:
+            continue
+        m = pattern.search(ln_clean)
+        if m:
+            candidates.append(ln_clean)
+        elif re.search(fallback_words, ln_clean.lower()):
+            candidates.append(ln_clean)
+    seen = []
+    for c in candidates:
+        c_clean = re.sub(r"\s+", " ", c).strip()
+        if c_clean not in seen:
+            seen.append(c_clean)
+    return seen
 
-# --- Web Search Fallback (DuckDuckGo) ---
-def duckduckgo_search(query: str) -> str:
-    """Free search using DuckDuckGo Instant Answer API"""
+# ---------------- WEB SEARCH ----------------
+def duckduckgo_search(query: str) -> Optional[str]:
     try:
-        url = "https://api.duckduckgo.com/"
-        params = {
-            "q": f"{query} recipe ingredients instructions how to make step by step cooking method preparation",
-            "format": "json",
-            "no_html": "1",
-            "skip_disambig": "1"
-        }
-        
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Extract relevant information
+        resp = requests.get(
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
+            timeout=10
+        )
+        data = resp.json()
+        if data.get("AbstractText"):
+            return data["AbstractText"]
         if data.get("Abstract"):
-            abstract = data["Abstract"]
-            # Clean up the abstract
-            abstract = re.sub(r'\s+', ' ', abstract).strip()
-            if len(abstract) > 20:  # Lowered threshold to get more results
-                return abstract
-        
-        # Try to get related topics
-        if data.get("RelatedTopics") and len(data["RelatedTopics"]) > 0:
-            for topic in data["RelatedTopics"][:8]:  # Check more topics
-                if isinstance(topic, dict) and "Text" in topic:
-                    text = topic["Text"]
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    # More flexible matching for recipe content
-                    if len(text) > 20 and any(keyword in text.lower() for keyword in ["recipe", "ingredient", "how to", "cook", "prepare", "make", "step", "method"]):
-                        return text
-        
-        return None
-        
+            return data["Abstract"]
+        if data.get("RelatedTopics"):
+            for t in data["RelatedTopics"]:
+                if isinstance(t, dict) and "Text" in t:
+                    return t["Text"]
     except Exception as e:
-        print(f"DuckDuckGo search failed: {e}")
-        return None
-
-def web_search(query: str) -> str:
-    """Web search using DuckDuckGo Instant Answer API"""
-    
-    print(f"Starting DuckDuckGo search for: {query}")  # Debug log
-    
-    # Use DuckDuckGo (free, no API key required)
-    duckduckgo_result = duckduckgo_search(query)
-    if duckduckgo_result:
-        print(f"DuckDuckGo search successful for: {query}")  # Debug log
-        return duckduckgo_result
-    
-    print(f"DuckDuckGo search failed for: {query}")  # Debug log
+        print(f"DuckDuckGo search error: {e}")
     return None
 
-def search_themealdb_with_fallback(dish: str) -> Optional[str]:
-    """Enhanced search with multiple fallback strategies"""
-    if not dish:
-        return None
-    
-    # Normalize the dish name
-    normalized_dish = normalize_dish_name(dish)
-    print(f"Searching for: '{dish}' (normalized: '{normalized_dish}')")
-    
-    # Strategy 1: Direct search with original name
-    result = fetch_recipe_from_themealdb(dish)
-    if result:
-        print(f"Found recipe with original name: {dish}")
-        return result
-    
-    # Strategy 2: Search with normalized name
-    if normalized_dish != dish:
-        result = fetch_recipe_from_themealdb(normalized_dish)
-        if result:
-            print(f"Found recipe with normalized name: {normalized_dish}")
-            return result
-    
-    # Strategy 3: Try partial matches (e.g., "pepperoni pizza" -> search for "pizza")
-    # Extract the main dish type
-    main_dishes = ["pizza", "burger", "pasta", "salad", "soup", "cake", "bread", "curry", "steak", "chicken", "fish", "beef", "pork"]
-    
-    for main_dish in main_dishes:
-        if main_dish in normalized_dish:
-            print(f"Trying partial match with main dish: {main_dish}")
-            result = fetch_recipe_from_themealdb(main_dish)
-            if result:
-                print(f"Found recipe with partial match: {main_dish}")
-                return result
-    
-    # Strategy 4: Try common variations
-    variations = {
-        "pepperoni pizza": ["pizza", "margherita pizza"],
-        "cheese pizza": ["pizza", "margherita pizza"],
-        "mushroom pizza": ["pizza", "vegetarian pizza"],
-        "chicken curry": ["curry", "chicken"],
-        "beef burger": ["burger", "hamburger"],
-        "fish and chips": ["fish", "chips"],
-        "chicken soup": ["soup", "chicken"],
-        "caesar salad": ["salad", "caesar"],
-        "chocolate cake": ["cake", "chocolate"],
-        "garlic bread": ["bread", "garlic"]
-    }
-    
-    for variation, alternatives in variations.items():
-        if any(alt in normalized_dish for alt in alternatives):
-            for alt in alternatives:
-                print(f"Trying variation: {alt}")
-                result = fetch_recipe_from_themealdb(alt)
-                if result:
-                    print(f"Found recipe with variation: {alt}")
-                    return result
-    
-    print(f"No recipe found for: {dish}")
-    return None
-
-def fetch_recipe_from_themealdb(dish: str) -> Optional[str]:
-    """Fetch a structured recipe from TheMealDB (free API). Returns formatted text or None."""
+def themealdb_search(dish: str) -> Optional[RecipeModel]:
     try:
-        url = "https://www.themealdb.com/api/json/v1/1/search.php"
-        params = {"s": dish}
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
+        resp = requests.get(
+            "https://www.themealdb.com/api/json/v1/1/search.php",
+            params={"s": dish},
+            timeout=10
+        )
         data = resp.json()
         meals = data.get("meals")
         if not meals:
             return None
-
         meal = meals[0]
-        name = meal.get("strMeal") or dish.title()
-        instructions_raw = meal.get("strInstructions") or ""
-
-        # Collect ingredients and measures
-        ingredients: List[str] = []
-        for i in range(1, 21):
-            ing = (meal.get(f"strIngredient{i}") or "").strip()
-            meas = (meal.get(f"strMeasure{i}") or "").strip()
-            if ing:
-                entry = f"{meas} {ing}".strip()
-                ingredients.append(entry)
-
-        # Build clean step list
-        steps: List[str] = []
-        text = instructions_raw.replace("\r", "\n")
-        # Split on newlines first, then further split long lines on sentences
-        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-        tmp_parts: List[str] = []
-        for ln in lines:
-            # Split on period followed by space or end
-            parts = re.split(r"\.(?:\s+|$)", ln)
-            for p in parts:
-                p = p.strip().strip(".-•‣")
-                if len(p) >= 2:
-                    tmp_parts.append(p)
-        # Normalize to numbered steps
-        for p in tmp_parts:
-            # Avoid duplicating numbers if present
-            p = re.sub(r"^\d+\)?\.?\s*", "", p)
-            steps.append(p)
-
-        # Format response
-        lines_out: List[str] = []
-        lines_out.append(f"{name} Recipe:")
-        if ingredients:
-            lines_out.append("\nIngredients:")
-            for ing_line in ingredients:
-                lines_out.append(f"- {ing_line}")
-        if steps:
-            lines_out.append("\nSteps:")
-            for idx, step in enumerate(steps, start=1):
-                lines_out.append(f"{idx}. {step}")
-
-        return "\n".join(lines_out).strip()
+        ingredients = [
+            f"{meal[f'strMeasure{i}']} {meal[f'strIngredient{i}']}".strip()
+            for i in range(1, 21) if meal.get(f"strIngredient{i}")
+        ]
+        return RecipeModel(
+            dish_name=meal.get("strMeal", dish),
+            ingredients=ingredients,
+            instructions=meal.get("strInstructions", "")
+        )
     except Exception as e:
-        print(f"TheMealDB fetch failed: {e}")
+        print(f"TheMealDB error: {e}")
         return None
 
-def get_basic_recipe(dish: str) -> str:
-    """Provide basic recipe information when web search fails"""
-    dish_lower = dish.lower()
-    
-    basic_recipes = {
-        "burger": """Classic Burger Recipe:
-1. Mix 1 lb ground beef with 1 tsp salt, 1/2 tsp pepper, 1/2 tsp garlic powder
-2. Form into 4 equal patties, make thumb indentation in center
-3. Heat oil in pan/grill to medium-high heat
-4. Cook patties 4-5 minutes per side for medium-rare
-5. Add cheese in last minute if desired
-6. Toast buns, assemble with lettuce, tomato, onion, pickles
-7. Serve with ketchup, mustard, and mayo""",
-        
-        "pizza": """Pizza Recipe:
-1. Make dough: Mix 3 cups flour, 1 tsp yeast, 1 cup warm water, 1 tsp salt, 1 tbsp olive oil
-2. Knead for 10 minutes, let rise 1 hour
-3. Roll out dough, add tomato sauce, cheese, and toppings
-4. Bake at 450°F (230°C) for 12-15 minutes until golden""",
-        
-        "omelet": """Classic Egg Omelet Recipe:
-1. Beat 3 eggs with 1 tbsp water, salt and pepper to taste
-2. Heat 1 tbsp butter in non-stick pan over medium heat
-3. Pour in beaten eggs, let set for 30 seconds
-4. Add fillings (cheese, vegetables, meat) to one half
-5. Fold other half over, cook 1-2 minutes until set
-6. Slide onto plate and serve immediately""",
-        
-        "egg omelet": """Classic Egg Omelet Recipe:
-1. Beat 3 eggs with 1 tbsp water, salt and pepper to taste
-2. Heat 1 tbsp butter in non-stick pan over medium heat
-3. Pour in beaten eggs, let set for 30 seconds
-4. Add fillings (cheese, vegetables, meat) to one half
-5. Fold other half over, cook 1-2 minutes until set
-6. Slide onto plate and serve immediately""",
-        
-        "lemon juice": """Lemon Juice Recipe:
-1. Wash and roll 4-6 fresh lemons on counter to release juice
-2. Cut lemons in half and juice using citrus juicer or by hand
-3. Strain through fine mesh to remove seeds and pulp
-4. Mix with water and sugar to taste (typically 1:1 ratio)
-5. Serve over ice""",
-        
-        "pasta": """Basic Pasta Recipe:
-1. Boil 1 lb pasta in salted water until al dente (8-10 minutes)
-2. Drain, reserving 1 cup pasta water
-3. Toss with olive oil, garlic, salt, and pepper
-4. Add pasta water if needed for creaminess
-5. Top with grated cheese and fresh herbs""",
-        
-        "cake": """Basic Cake Recipe:
-1. Mix 2 cups flour, 1 cup sugar, 1 tsp baking powder, 1/2 tsp salt
-2. Beat in 2 eggs, 1/2 cup milk, 1/3 cup oil
-3. Pour into greased 9x9 pan
-4. Bake at 350°F (175°C) for 25-30 minutes
-5. Cool before frosting""",
-        
-        "bread": """Basic Bread Recipe:
-1. Mix 3 cups flour, 1 tsp yeast, 1 tsp salt, 1 tbsp sugar
-2. Add 1 cup warm water, knead for 10 minutes
-3. Let rise 1 hour, punch down, shape
-4. Rise again 30 minutes, bake at 400°F (200°C) for 30 minutes""",
-        
-        "mushroom salad": """Simple Mushroom Salad Recipe:
-1. Clean and slice 8 oz fresh mushrooms
-2. Mix with 2 tbsp olive oil, 1 tbsp lemon juice, salt and pepper
-3. Add 1/4 cup chopped parsley and 2 tbsp grated parmesan
-4. Let marinate 15 minutes, serve chilled"""
-    }
-    
-    # Find best match
-    for key, recipe in basic_recipes.items():
-        if key in dish_lower:
-            return recipe
-    
-    # Generic recipe for unknown dishes
-    return f"""Basic Cooking Tips for {dish}:
-1. Start with fresh, quality ingredients
-2. Follow proper food safety practices
-3. Season to taste with salt and pepper
-4. Cook at appropriate temperatures
-5. Let food rest before serving
-6. Taste as you cook and adjust seasoning"""
+def get_recipe_from_web(dish: str) -> Optional[RecipeModel]:
+    recipe = themealdb_search(dish)
+    if recipe:
+        return recipe
+    web_text = duckduckgo_search(f"{dish} recipe ingredients")
+    if web_text:
+        return RecipeModel(dish_name=dish, ingredients=[], instructions=web_text)
+    return None
 
-def check_inventory_for_any_dish(dish: str, inventory: Dict[str, int]) -> str:
-    """Check ingredient availability for any dish (not just database recipes)"""
-    if not inventory:
-        return f"You don't have the ingredients needed for {dish}. The inventory is currently empty."
+# ---------------- FALLBACK RESPONSE GENERATOR ----------------
+def generate_fallback_response(user_text: str, web_recipe: Optional[RecipeModel], inventory: Dict[str, int], inv_analysis: Optional[InventoryAnalysis]) -> str:
+    """Generate a fallback response when AI service is unavailable"""
     
-    # Common ingredients for different dish types
-    common_ingredients = {
-        "burger": [
-            "bun", "buns", "beef", "beef patty", "patty", "cheese", "lettuce",
-            "tomato", "onion", "pickles", "ketchup", "mustard", "mayo",
-            "oil", "salt", "pepper"
-        ],
-        "omelet": ["eggs", "butter", "salt", "pepper", "water", "cheese", "vegetables"],
-        "egg omelet": ["eggs", "butter", "salt", "pepper", "water", "cheese", "vegetables"],
-        "mushroom salad": ["mushrooms", "olive oil", "lemon juice", "salt", "pepper", "parsley", "parmesan"],
-        "pizza": ["flour", "yeast", "water", "salt", "olive oil", "tomato", "cheese", "basil"],
-        "lemon juice": ["lemon", "water", "sugar", "salt"],
-        "pasta": ["flour", "eggs", "salt", "olive oil", "tomato", "cheese"],
-        "salad": ["lettuce", "tomato", "cucumber", "olive oil", "vinegar", "salt"],
-        "soup": ["vegetables", "broth", "salt", "pepper", "herbs"],
-        "cake": ["flour", "sugar", "eggs", "milk", "butter", "baking powder"],
-        "bread": ["flour", "yeast", "water", "salt", "sugar"],
-        "rice": ["rice", "water", "salt", "butter"],
-        "chicken": ["chicken", "oil", "salt", "pepper", "herbs"],
-        "fish": ["fish", "oil", "salt", "pepper", "lemon"],
-        "beef": ["beef", "oil", "salt", "pepper", "garlic"],
-        "pork": ["pork", "oil", "salt", "pepper", "garlic"]
-    }
-    
-    # Find the best matching dish category
-    best_match = None
-    best_score = 0
-    
-    for dish_type, ingredients in common_ingredients.items():
-        if dish_type in dish.lower():
-            best_match = dish_type
-            break
-        # Check for partial matches
-        score = sum(1 for word in dish.lower().split() if word in dish_type)
-        if score > best_score:
-            best_score = score
-            best_match = dish_type
-    
-    if not best_match:
-        # Generic ingredients for unknown dishes
-        generic_ingredients = ["flour", "salt", "oil", "water", "eggs", "milk", "sugar", "herbs"]
-        return analyze_ingredients(generic_ingredients, inventory, dish)
-    
-    # Check ingredients for the specific dish
-    return analyze_ingredients(common_ingredients[best_match], inventory, dish)
-
-def analyze_ingredients(required_ingredients: List[str], inventory: Dict[str, int], dish: str) -> str:
-    """Analyze ingredient availability and provide detailed feedback"""
-    if not inventory:
-        return f"You don't have the ingredients needed for {dish}. The inventory is currently empty."
-    
-    available = []
-    missing = []
-    low_stock = []
-    
-    for ingredient in required_ingredients:
-        # Find closest match in inventory
-        closest = find_closest_ingredient(ingredient, list(inventory.keys()))
-        if closest in inventory:
-            stock = inventory[closest]
-            if stock > 0:
-                available.append(f"{closest} ({stock})")
-                if stock <= 2:  # Consider low stock if 2 or less
-                    low_stock.append(closest)
-            else:
-                missing.append(ingredient)
-        else:
-            missing.append(ingredient)
-    
-    # Build response
     response_parts = []
     
-    if available:
-        response_parts.append(f"Available: {', '.join(available)}")
-    
-    if low_stock:
-        response_parts.append(f"Low stock: {', '.join(low_stock)}")
-    
-    if missing:
-        if len(missing) == 1:
-            response_parts.append(f"You miss ingredient: {missing[0]}")
+    # Check if it's an inventory question
+    if any(word in user_text.lower() for word in ["inventory", "ingredients", "stock", "what do you have"]):
+        if inventory and not "error" in inventory:
+            response_parts.append("**Current Inventory (with quantities):**")
+            for item, quantity in inventory.items():
+                if quantity == 0:
+                    response_parts.append(f"- {item}: OUT OF STOCK")
+                elif quantity <= 2:
+                    response_parts.append(f"- {item}: LOW STOCK ({quantity})")
+                else:
+                    response_parts.append(f"- {item}: {quantity}")
         else:
-            response_parts.append(f"You miss ingredients: {', '.join(missing)}")
+            response_parts.append("Unable to fetch inventory data at this time.")
     
-    if not response_parts:
-        response_parts.append("No ingredient information available.")
-    
-    return " | ".join(response_parts)
-
-def _generate_ngrams(tokens: List[str], n: int = 2) -> Set[str]:
-    ngrams: Set[str] = set()
-    for i in range(len(tokens) - n + 1):
-        ngrams.add(" ".join(tokens[i : i + n]))
-    return ngrams
-
-def analyze_inventory_query(user_text: str, inventory: Dict[str, int]) -> str:
-    """Answer direct inventory questions for specific items mentioned in the text."""
-    if db is not None and not inventory:
-        # DB connected but no items present
-        return "The inventory is currently empty."
-
-    if not inventory:
-        return "No inventory data available."
-
-    text_lower = user_text.lower()
-    # Handle list-all ingredients requests (e.g., "give me the ingredients in my database")
-    if (("ingredients" in text_lower and re.search(r"\b(list|show|display|all|database|db|my)\b", text_lower))
-        or re.search(r"\b(list|show|display)\b.*\bingredients?\b", text_lower)):
-        parts = [f"{name}: {qty}" for name, qty in sorted(inventory.items(), key=lambda x: x[0])]
-        return " | ".join(parts) if parts else "No inventory data available."
-
-    tokens = re.findall(r"[a-zA-Z]+", text_lower)
-    tokens = [t for t in tokens if t not in {"how", "to", "make", "cook", "prepare", "the", "a", "an", "and", "of", "for", "do", "we", "have", "any", "is", "there", "stock", "in", "our", "restaurant", "available", "availability", "left", "many", "quantity", "count", "units", "unit", "give", "me", "much", "do", "i"}]
-
-    bigrams = _generate_ngrams(tokens, 2)
-    candidate_terms: Set[str] = set(tokens) | bigrams
-
-    inventory_keys = list(inventory.keys())
-    matched: List[Tuple[str, int]] = []
-
-    # Direct substring matches first
-    for key in inventory_keys:
-        if key in text_lower:
-            matched.append((key, inventory[key]))
-
-    # Fuzzy match for remaining
-    matched_keys = {k for k, _ in matched}
-    missing_ingredients = []
-    
-    for term in candidate_terms:
-        if len(term) < 2:  # Skip very short terms
-            continue
-        if any(term in k or k in term for k in matched_keys):
-            continue
-        close = get_close_matches(term, inventory_keys, n=1, cutoff=0.6)
-        if close:
-            key = close[0]
-            if key not in matched_keys:
-                matched.append((key, inventory[key]))
-                matched_keys.add(key)
-        else:
-            # If no match found, this might be a missing ingredient
-            if term not in [m[0] for m in matched] and len(term) >= 3:
-                missing_ingredients.append(term)
-
-    if not matched and candidate_terms:
-        # Check if any meaningful terms were mentioned but not found
-        meaningful_terms = [term for term in candidate_terms if len(term) >= 3]
-        if meaningful_terms:
-            if len(meaningful_terms) == 1:
-                return f"You don't have {meaningful_terms[0]} in your inventory."
+    # Check if it's a database question
+    elif any(word in user_text.lower() for word in ["users", "orders", "sales", "profit", "cost", "employees", "statistics"]):
+        try:
+            stats = get_restaurant_stats()
+            if "error" not in stats:
+                response_parts.append("**Restaurant Statistics:**")
+                response_parts.append(f"- Total Users: {stats.get('total_users', 0)}")
+                response_parts.append(f"- Total Orders: {stats.get('total_orders', 0)}")
+                response_parts.append(f"- Total Revenue: ${stats.get('total_revenue', 0):.2f}")
+                response_parts.append(f"- Total Profit: ${stats.get('total_profit', 0):.2f}")
+                response_parts.append(f"- Total Items: {stats.get('total_items', 0)}")
+                response_parts.append(f"- Total Ingredients: {stats.get('total_ingredients', 0)}")
             else:
-                return f"You don't have {', '.join(meaningful_terms)} in your inventory."
-
-    if not matched:
-        # Provide a helpful hint if no terms matched
-        sample = ", ".join(list(inventory.keys())[:5]) if inventory else ""
-        hint = f" Known inventory items include: {sample}." if sample else ""
-        return "I couldn't find those items in the inventory." + hint
-
-    # Build concise response
-    parts = [f"{name}: {qty}" for name, qty in matched]
-    response = " | ".join(parts)
+                response_parts.append("Unable to fetch statistics at this time.")
+        except:
+            response_parts.append("Unable to fetch database information at this time.")
     
-    # Add missing ingredients info if any
-    if missing_ingredients:
-        if len(missing_ingredients) == 1:
-            response += f" | You don't have {missing_ingredients[0]} in your inventory."
+    # Add recipe if available and it's a recipe question
+    elif web_recipe and web_recipe.ingredients:
+        response_parts.append(f"**{web_recipe.dish_name.title()} Recipe**")
+        response_parts.append("\n**Ingredients:**")
+        for ingredient in web_recipe.ingredients:
+            response_parts.append(f"- {ingredient}")
+        
+        if web_recipe.instructions:
+            response_parts.append("\n**Instructions:**")
+            instructions = web_recipe.instructions.replace('\n\n', '\n').strip()
+            response_parts.append(instructions)
+    
+    # Add note about AI service
+    response_parts.append("\n*Note: AI service is temporarily unavailable. This response was generated from available data.*")
+    
+    return '\n'.join(response_parts)
+
+# ---------------- MAIN LLM AGENT ----------------
+agent = Agent("google-gla:gemini-1.5-flash", system_prompt=SYSTEM_PROMPT)
+
+async def handle_user_query(user_text: str) -> str:
+    if not is_restaurant_query(user_text):
+        return "I can only answer restaurant-related questions such as recipes, ingredients, and inventory."
+
+    inventory = get_inventory()
+    if "error" in inventory:
+        return inventory["error"]
+
+    dish_match = re.search(r"(?:recipe for|ingredients of|how to make)\s+([a-zA-Z\s]+)", user_text.lower())
+    dish_name = dish_match.group(1).strip() if dish_match else None
+
+    web_recipe = None
+    inv_analysis = None
+
+    if dish_name:
+        web_recipe = get_recipe_from_web(dish_name)
+        if web_recipe:
+            if not web_recipe.ingredients and web_recipe.instructions:
+                web_recipe.ingredients = extract_ingredients_from_text(web_recipe.instructions)
+            if web_recipe.ingredients:
+                ing_names = [
+                    re.sub(r"\d+|\b(g|kg|ml|l|cup|cups|tbsp|tsp|tablespoon|teaspoon|oz|ounce|lb|pound)\b", "", ing, flags=re.I).strip()
+                    for ing in web_recipe.ingredients
+                ]
+                inv_analysis = analyze_inventory(ing_names, inventory)
+
+    # Fetch all relevant database data
+    users_data = get_users()
+    orders_data = get_orders()
+    items_data = get_items()
+    sales_data = get_daily_sales()
+    stats_data = get_restaurant_stats()
+    
+    context_prompt = dedent(f"""
+    User Query: {user_text}
+
+    Web Search Recipe: {safe_json_dumps(web_recipe.model_dump() if web_recipe else {}, indent=2)}
+
+    Inventory Data: {safe_json_dumps(inventory, indent=2)}
+
+    Inventory Analysis: {safe_json_dumps(inv_analysis.model_dump() if inv_analysis else {}, indent=2)}
+
+    Database Information:
+    - Users: {safe_json_dumps(users_data, indent=2)}
+    - Orders: {safe_json_dumps(orders_data, indent=2)}
+    - Menu Items: {safe_json_dumps(items_data, indent=2)}
+    - Daily Sales: {safe_json_dumps(sales_data, indent=2)}
+    - Restaurant Statistics: {safe_json_dumps(stats_data, indent=2)}
+
+    IMPORTANT: 
+    - For inventory questions: ALWAYS include quantities for each ingredient mentioned.
+    - For database questions: Provide comprehensive information from the database.
+    - For recipe questions: Always provide the complete recipe first, then include inventory status.
+    - Format responses professionally with clear sections.
+    - Include relevant statistics, summaries, and insights when appropriate.
+    """)
+
+    try:
+        # Debug logging (only in console, not in user response)
+        result = await agent.run(context_prompt, output_type=LLMResponse)
+        
+        # Clean the response for the user - remove any debug output
+        clean_response = result.output.answer.strip()
+        
+        # Remove debug lines if they somehow got into the response
+        lines = clean_response.split('\n')
+        filtered_lines = []
+        for line in lines:
+            if not any(debug_text in line.lower() for debug_text in [
+                'calling agent', 'agent response received', 'prompt length'
+            ]):
+                filtered_lines.append(line)
+        
+        return '\n'.join(filtered_lines)
+    except Exception as e:
+        print(f"Agent error: {str(e)}")
+        print(f"Error type: {type(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Handle specific Google AI API errors gracefully
+        if "503" in str(e) or "UNAVAILABLE" in str(e):
+            # Provide fallback response using available data
+            fallback_response = generate_fallback_response(user_text, web_recipe, inventory, inv_analysis)
+            return fallback_response
+        elif "quota" in str(e).lower() or "limit" in str(e).lower():
+            return "The AI service has reached its usage limit. Please try again later or contact support."
         else:
-            response += f" | You don't have {', '.join(missing_ingredients)} in your inventory."
-    
-    return response
+            return f"Assistant error: {str(e)}"
 
-# --- Enhanced Gemini-Powered Functions ---
-async def get_recipe_with_gemini(dish: str, user_text: str, inventory: Dict[str, int]) -> str:
-    """Get recipe using Gemini AI with web search fallback"""
-    agent = create_gemini_agent()
-    
-    if not agent:
-        # Fallback to original method if Gemini is not available
-        return await get_recipe_with_fallback(dish, user_text, inventory)
-    
-    try:
-        # First, try web search for latest information
-        web_result = web_search(dish)
-        
-        # Create enhanced prompt for Gemini
-        prompt = dedent(f"""
-        You are a professional chef and restaurant consultant. The user is asking about: {dish}
-        
-        If web search provided information, use it as a base but enhance it with your culinary expertise.
-        If no web search results, create a comprehensive recipe from your knowledge.
-        
-        Web search result: {web_result if web_result else 'No web results available'}
-        
-        Please provide a detailed recipe for {dish} including:
-        1. List of ingredients with quantities
-        2. Step-by-step cooking instructions
-        3. Cooking tips and best practices
-        4. Estimated cooking time
-        5. Difficulty level
-        
-        Make the response engaging, professional, and easy to follow.
-        """)
-        
-        # Get response from Gemini
-        result = await agent.run(prompt, output_type=RecipeRequest)
-        
-        # Format the response
-        recipe_response = f"""
- **{result.output.dish_name.title()} Recipe**
-
- **Ingredients:**
-{', '.join(result.output.ingredients)}
-
- **Instructions:**
-{result.output.instructions}
-
- **Cooking Time:** {result.output.cooking_time}
- **Difficulty:** {result.output.difficulty}
-        """.strip()
-        
-        # Add inventory check
-        inventory_info = check_inventory_for_any_dish(dish, inventory)
-        
-        return f"{recipe_response}\n\n📦 **Inventory Status:**\n{inventory_info}"
-        
-    except Exception as e:
-        print(f"Gemini recipe generation failed: {e}")
-        # Fallback to original method
-        return await get_recipe_with_fallback(dish, user_text, inventory)
-
-async def analyze_inventory_with_gemini(user_text: str, inventory: Dict[str, int]) -> str:
-    """Analyze inventory using Gemini AI for better insights"""
-    agent = create_gemini_agent()
-    
-    if not agent:
-        # Fallback to original method
-        return analyze_inventory_query(user_text, inventory)
-    
-    try:
-        # Create inventory analysis prompt
-        prompt = dedent(f"""
-        You are a restaurant inventory manager. Analyze the following inventory query and provide insights.
-        
-        User Query: {user_text}
-        Current Inventory: {json.dumps(inventory, indent=2)}
-        
-        Please analyze the inventory and provide:
-        1. Available ingredients that match the query
-        2. Missing ingredients if a specific dish is mentioned
-        3. Low stock warnings
-        4. Professional recommendations for inventory management
-        
-        Focus on being helpful and actionable.
-        """)
-        
-        result = await agent.run(prompt, output_type=InventoryCheck)
-        
-        # Format the response
-        response_parts = []
-        
-        if result.output.available_ingredients:
-            response_parts.append(f" **Available:** {', '.join(result.output.available_ingredients)}")
-        
-        if result.output.missing_ingredients:
-            response_parts.append(f" **Missing:** {', '.join(result.output.missing_ingredients)}")
-        
-        if result.output.low_stock_ingredients:
-            response_parts.append(f" **Low Stock:** {', '.join(result.output.low_stock_ingredients)}")
-        
-        if result.output.summary:
-            response_parts.append(f" **Summary:** {result.output.summary}")
-        
-        return "\n".join(response_parts) if response_parts else "No inventory analysis available."
-        
-    except Exception as e:
-        print(f"Gemini inventory analysis failed: {e}")
-        return analyze_inventory_query(user_text, inventory)
-
-async def get_trending_analysis_with_gemini() -> str:
-    """Get trending analysis using Gemini AI"""
-    agent = create_gemini_agent()
-    
-    if not agent:
-        return get_trending_recipes()
-    
-    try:
-        # Get recent trending data
-        recent_trending = get_recent_trending(7)  # Last 7 days
-        
-        prompt = dedent(f"""
-        You are a restaurant industry analyst. Analyze the following trending data and provide insights.
-        
-        Recent Trending Dishes: {recent_trending if recent_trending else 'No trending data available'}
-        
-        Please provide:
-        1. Analysis of current food trends
-        2. Recommendations for menu planning
-        3. Seasonal considerations
-        4. Customer preference insights
-        
-        Make your analysis professional and actionable for restaurant management.
-        """)
-        
-        result = await agent.run(prompt, output_type=TrendingAnalysis)
-        
-        # Format the response
-        trending_response = f"""
- **Restaurant Trends Analysis**
-
- **Popular Dishes:** {', '.join(result.output.popular_dishes) if result.output.popular_dishes else 'Based on recent data'}
-
- **Trending Patterns:** {result.output.trending_patterns}
-
- **Recommendations:** {result.output.recommendations}
-        """.strip()
-        
-        return trending_response
-        
-    except Exception as e:
-        print(f"Gemini trending analysis failed: {e}")
-        return get_trending_recipes()
-
-async def get_recipe_with_fallback(dish: str, user_text: str, inventory: Dict[str, int]):
-    """Get recipe with web search fallback"""
-    
-    # Try TheMealDB first for structured recipes
-    print(f"Checking TheMealDB for recipe: {dish}")
-    themeal_result = search_themealdb_with_fallback(dish)
-    if themeal_result:
-        availability_info = check_inventory_for_any_dish(dish, inventory)
-        return f"{themeal_result}\n\n{availability_info}"
-
-    # If TheMealDB didn't have it, try DuckDuckGo Instant Answers (best-effort)
-    print(f"TheMealDB not found for {dish}, trying DuckDuckGo")
-    web_result = web_search(dish)
-    if web_result:
-        availability_info = check_inventory_for_any_dish(dish, inventory)
-        return f"{web_result}\n\n{availability_info}"
-    
-    print(f"Web search failed for {dish}, using fallback recipe")  # Debug log
-    # If web search fails, provide basic cooking tips
-    fallback_help = get_basic_recipe(dish)
-    availability_info = check_inventory_for_any_dish(dish, inventory)
-    return f"{fallback_help}\n\n{availability_info}"
-
-# --- Main Logic ---
-async def restaurant_agent(user_text: str, inventory: Dict[str, int]):
-    """Main restaurant agent function with Gemini AI enhancement"""
-    
-    intent = classify_intent(user_text)
-    dish = extract_dish_name(user_text)
-    
-    # Domain guard response
-    if intent == "out_of_domain":
-        return "I can only answer restaurant topics such as recipes, ingredients, menu items, and inventory."
-
-    if intent == "recipe_request":
-        if dish:
-            log_query(user_text, dish)
-            # Use regular recipe generation (Gemini temporarily disabled)
-            return await get_recipe_with_fallback(dish, user_text, inventory)
-        else:
-            return "I'd be happy to help you with a recipe! Could you please specify what dish you'd like to make? For example: 'How to make lemon juice' or 'Recipe for pizza'."
-    
-    elif intent == "inventory_check":
-        # Use regular inventory analysis (Gemini temporarily disabled)
-        return analyze_inventory_query(user_text, inventory)
-    
-    elif intent == "trending_request":
-        # Use regular trending analysis (Gemini temporarily disabled)
-        return get_trending_recipes()
-    
-    elif intent == "general_query":
-        return "I can help you with recipes, ingredient checks, and restaurant insights. What would you like to know?"
-    
-    # Default response
-    return "I'm here to help with recipes and ingredient information. How can I assist you today?"
-
-async def assistant_query(input_data: str, inventory: Dict[str, int]):
-    """Main entry point for assistant queries"""
-    try:
-        result = await restaurant_agent(input_data, inventory)
-        return result
-    except Exception as e:
-        print(f"Error in assistant_query: {e}")
-        return f"I encountered an error while processing your request: {str(e)}"
-
-# --- Entry Point ---
+# ---------------- ENTRY POINT ----------------
 if __name__ == "__main__":
     import sys
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Restaurant AI Assistant")
-    parser.add_argument("text", help="User query text")
-    args = parser.parse_args()
-    
-    # Get inventory from MongoDB
-    inventory = get_ingredient_availability()
-    
-    # Process the query
-    result = asyncio.run(assistant_query(args.text, inventory))
-    print(result)
+    if len(sys.argv) < 2:
+        print("Usage: python assistant.py 'your query'")
+        sys.exit(1)
+    query = sys.argv[1]
+    answer = asyncio.run(handle_user_query(query))
+    print(answer)
