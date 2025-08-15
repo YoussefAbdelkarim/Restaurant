@@ -799,16 +799,16 @@ async def get_recipe_with_gemini(dish: str, user_text: str, inventory: Dict[str,
         
         # Format the response
         recipe_response = f"""
-🍽️ **{result.output.dish_name.title()} Recipe**
+ **{result.output.dish_name.title()} Recipe**
 
-📋 **Ingredients:**
+ **Ingredients:**
 {', '.join(result.output.ingredients)}
 
-👨‍🍳 **Instructions:**
+ **Instructions:**
 {result.output.instructions}
 
-⏱️ **Cooking Time:** {result.output.cooking_time}
-🎯 **Difficulty:** {result.output.difficulty}
+ **Cooking Time:** {result.output.cooking_time}
+ **Difficulty:** {result.output.difficulty}
         """.strip()
         
         # Add inventory check
@@ -852,16 +852,16 @@ async def analyze_inventory_with_gemini(user_text: str, inventory: Dict[str, int
         response_parts = []
         
         if result.output.available_ingredients:
-            response_parts.append(f"✅ **Available:** {', '.join(result.output.available_ingredients)}")
+            response_parts.append(f" **Available:** {', '.join(result.output.available_ingredients)}")
         
         if result.output.missing_ingredients:
-            response_parts.append(f"❌ **Missing:** {', '.join(result.output.missing_ingredients)}")
+            response_parts.append(f" **Missing:** {', '.join(result.output.missing_ingredients)}")
         
         if result.output.low_stock_ingredients:
-            response_parts.append(f"⚠️ **Low Stock:** {', '.join(result.output.low_stock_ingredients)}")
+            response_parts.append(f" **Low Stock:** {', '.join(result.output.low_stock_ingredients)}")
         
         if result.output.summary:
-            response_parts.append(f"📊 **Summary:** {result.output.summary}")
+            response_parts.append(f" **Summary:** {result.output.summary}")
         
         return "\n".join(response_parts) if response_parts else "No inventory analysis available."
         
@@ -898,13 +898,13 @@ async def get_trending_analysis_with_gemini() -> str:
         
         # Format the response
         trending_response = f"""
-📈 **Restaurant Trends Analysis**
+ **Restaurant Trends Analysis**
 
-🔥 **Popular Dishes:** {', '.join(result.output.popular_dishes) if result.output.popular_dishes else 'Based on recent data'}
+ **Popular Dishes:** {', '.join(result.output.popular_dishes) if result.output.popular_dishes else 'Based on recent data'}
 
-📊 **Trending Patterns:** {result.output.trending_patterns}
+ **Trending Patterns:** {result.output.trending_patterns}
 
-💡 **Recommendations:** {result.output.recommendations}
+ **Recommendations:** {result.output.recommendations}
         """.strip()
         
         return trending_response
