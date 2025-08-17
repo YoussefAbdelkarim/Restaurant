@@ -7,6 +7,7 @@ router.get('/', protect,ingredientController.getIngredients);
 router.post('/', protect,ingredientController.createIngredient);
 router.get('/:id', protect,ingredientController.getIngredientById);
 router.put('/:id', protect,ingredientController.updateIngredient);
+router.patch('/:id/stock', protect, ingredientController.updateIngredientStock);
 router.delete('/:id',protect,ingredientController.deleteIngredient);
 
 module.exports = router;

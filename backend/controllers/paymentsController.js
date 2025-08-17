@@ -99,7 +99,8 @@ const getPayments = async (req, res) => {
           type: payment.type,
           amount: payment.amount,
           date: payment.date,
-          notes: payment.notes
+          notes: payment.notes,
+          status: payment.status
         };
 
         if (payment.type === 'salary') {
@@ -172,4 +173,63 @@ const getPayments = async (req, res) => {
   }
 };
 
-module.exports = { createPayment, getPayments };
+const deletePayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const payment = await Payment.findById(id);
+    if (!payment) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
+    await Payment.findByIdAndDelete(id);
+    
+    res.json({ message: 'Payment deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+};
+
+const updatePaymentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    if (!['pending', 'paid'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid status. Use "pending" or "paid"' });
+    }
+
+    const payment = await Payment.findByIdAndUpdate(
+      id, 
+      { status }, 
+      { new: true }
+    ).populate('user', 'name');
+
+    if (!payment) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
+    const formattedPayment = {
+      _id: payment._id,
+      type: payment.type,
+      amount: payment.amount,
+      date: payment.date,
+      notes: payment.notes,
+      status: payment.status
+    };
+
+    if (payment.type === 'salary') {
+      formattedPayment.employeeName = payment.user?.name || 'Unknown Employee';
+    } else if (payment.type === 'purchase') {
+      formattedPayment.itemName = payment.itemName;
+      formattedPayment.quantity = payment.quantity;
+      formattedPayment.unitPrice = payment.unitPrice;
+    }
+
+    res.json(formattedPayment);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+};
+
+module.exports = { createPayment, getPayments, deletePayment, updatePaymentStatus };

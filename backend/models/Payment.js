@@ -44,6 +44,11 @@ const paymentSchema = new mongoose.Schema({
   },
   notes: {
     type: String
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'paid'],
+    default: 'pending'
   }
 }, {
   timestamps: true

@@ -6,7 +6,7 @@ const createItem = async (req, res) => {
     const { name, category, price, ingredients, currentStock, alertThreshold } = req.body;
 
     if (!name || !category || !price) {
-      return res.status(400).json({ message: 'Name, category, price and ingrediants are required' });
+      return res.status(400).json({ message: 'Name, category, and price are required' });
     }
 
     const existingItem = await Item.findOne({ name });
@@ -26,7 +26,14 @@ const createItem = async (req, res) => {
       }
     }
 
-    const newItem = new Item({ name, category, price, ingredients, currentStock, alertThreshold });
+    const newItem = new Item({ 
+      name, 
+      category, 
+      price, 
+      ingredients: ingredients || [], 
+      currentStock: currentStock || 0, 
+      alertThreshold: alertThreshold || 20 
+    });
     await newItem.save();
 
     res.status(201).json(newItem);
@@ -78,6 +85,40 @@ const updateItem = async (req, res) => {
   }
 };
 
+const updateItemStock = async (req, res) => {
+  try {
+    const { quantity, operation } = req.body; // operation: 'add' or 'subtract'
+    
+    if (!quantity || !operation) {
+      return res.status(400).json({ message: 'Quantity and operation are required' });
+    }
+
+    const item = await Item.findById(req.params.id);
+    if (!item) {
+      return res.status(404).json({ message: 'Item not found' });
+    }
+
+    let newStock;
+    if (operation === 'add') {
+      newStock = item.currentStock + quantity;
+    } else if (operation === 'subtract') {
+      newStock = item.currentStock - quantity;
+      if (newStock < 0) {
+        return res.status(400).json({ message: 'Cannot subtract more than current stock' });
+      }
+    } else {
+      return res.status(400).json({ message: 'Operation must be "add" or "subtract"' });
+    }
+
+    item.currentStock = newStock;
+    await item.save();
+
+    res.json(item);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
 const deleteItem = async (req, res) => {
   try {
     const item = await Item.findById(req.params.id);
@@ -97,5 +138,6 @@ module.exports = {
   getItems,
   getItemById,
   updateItem,
+  updateItemStock,
   deleteItem
 };
