@@ -22,7 +22,7 @@ const ViewEmployees = () => {
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
-        const response = await axios.get('http://localhost:5000/api/auth'); 
+        const response = await axios.get('/api/auth'); 
          console.log(response.data); 
         setEmployees(response.data);
       } catch (error) {
@@ -48,7 +48,7 @@ const ViewEmployees = () => {
   const handleEditItemSubmit = async (e) => {
     e.preventDefault();
     try {
-      await axios.put(`http://localhost:5000/api/auth/${editFormData._id}`, editFormData);
+      await axios.put(`/api/auth/${editFormData._id}`, editFormData);
       setEmployees(prev => prev.map(emp => (emp._id === editFormData._id ? editFormData : emp)));
       setShowEditForm(false);
     } catch (error) {
@@ -60,7 +60,7 @@ const ViewEmployees = () => {
   const handleDelete = async (_id) => {
     if (window.confirm('Are you sure you want to delete this employee?')) {
       try {
-        await axios.delete(`http://localhost:5000/api/auth/${_id}`);
+        await axios.delete(`/api/auth/${_id}`);
         setEmployees(employees.filter(emp => emp._id !== _id));
       } catch (error) {
         console.error('Error deleting employee:', error);

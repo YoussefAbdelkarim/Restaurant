@@ -30,7 +30,7 @@ const itemSchema = new mongoose.Schema(
     },
     cost:{
       type: Number,
-      required: true,
+      default: 0,
     },
     price: {
       type: Number,
@@ -38,7 +38,7 @@ const itemSchema = new mongoose.Schema(
     },
     category: {
       type: String,
-      enum: ['plate', 'sandwich','drink'],
+      enum: ['plate', 'sandwich', 'drink', 'burger', 'pizza', 'dessert', 'beverage', 'fries', 'spirits', 'pancakes', 'cake', 'juice'],
       required: true,
     },
     ingredients: [ingredientSchema],

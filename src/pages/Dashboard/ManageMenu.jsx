@@ -7,8 +7,8 @@ const categoryImages = {
   pizza: 'pizza.jpg',
   burger: 'burgers.jpg',
   fries: 'fries.jpg',
-  drink: 'drinks-img.jpg',
-  dessert: 'dessert-img.jpg',
+  drink: 'drink.jpg',
+  dessert: 'dessert.jpg',
   other: 'other.jpg',
   plate: 'plate.jpg',
   sandwich: 'sandwich.jpg',
@@ -276,11 +276,14 @@ export default function ManageMenu() {
             whileInView={{ opacity: 1, x: 0 }}
             transition={{ duration: 1 }}
           >
-            <img
-              className="category-image"
-              src={`http://localhost:5000/images/${categoryImages[category] || 'default.jpg'}`}
-              alt={`${category} category`}
-            />
+                         <img
+               className="category-image"
+               src={`/images/${categoryImages[category] || 'pizza.jpg'}`}
+               alt={`${category} category`}
+               onError={(e) => {
+                 e.target.src = '/images/pizza.jpg'; // fallback to pizza image
+               }}
+             />
           </motion.div>
         </div>
       ))}
@@ -513,15 +516,16 @@ export default function ManageMenu() {
               </p>
               <button onClick={handleCloseDetails}>Close</button>
             </div>
-            {selectedDish.imageUrl && (
-              <div className="modal-image" style={{ flexShrink: 0, width: '220px' }}>
-                <img
-                  src={`http://localhost:5000/images/${selectedDish.imageUrl}`}
-                  alt={selectedDish.name}
-                  style={{ width: '100%', borderRadius: '10px' }}
-                />
-              </div>
-            )}
+                         <div className="modal-image" style={{ flexShrink: 0, width: '220px' }}>
+               <img
+                 src={selectedDish.imageUrl ? `/images/${selectedDish.imageUrl}` : `/images/${categoryImages[selectedDish.category] || 'pizza.jpg'}`}
+                 alt={selectedDish.name}
+                 style={{ width: '100%', borderRadius: '10px' }}
+                 onError={(e) => {
+                   e.target.src = `/images/${categoryImages[selectedDish.category] || 'pizza.jpg'}`;
+                 }}
+               />
+             </div>
           </div>
         </div>
       )}

@@ -13,17 +13,34 @@ const AddOrder = () => {
 
   // List of menu items (fetched from backend)
   const [itemsList, setItemsList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   // Fetch available menu items (from backend)
   useEffect(() => {
     const fetchItems = async () => {
       try {
-        const res = await fetch("http://localhost:5000/api/items"); // <-- backend endpoint
+        const token = localStorage.getItem('token');
+        if (!token) {
+          console.error('No authentication token found');
+          return;
+        }
+
+        const res = await fetch("/api/items", {
+          headers: { 
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json"
+          }
+        });
+        
         if (!res.ok) throw new Error("Failed to fetch menu items");
         const data = await res.json();
         setItemsList(data);
+        setLoading(false);
       } catch (error) {
         console.error("Error fetching items:", error);
+        setError(error.message);
+        setLoading(false);
       }
     };
 
@@ -51,24 +68,61 @@ const AddOrder = () => {
     setForm({ ...form, items: newItems });
   };
 
+  // Validate order quantities against available stock
+  const validateOrderQuantities = () => {
+    const errors = [];
+    
+    form.items.forEach((orderItem, index) => {
+      if (orderItem.item) {
+        const menuItem = itemsList.find(item => item._id === orderItem.item);
+        if (menuItem) {
+          if (orderItem.quantity > menuItem.currentStock) {
+            errors.push(`${menuItem.name}: Requested ${orderItem.quantity}, but only ${menuItem.currentStock} available`);
+          }
+        }
+      }
+    });
+    
+    return errors;
+  };
+
   // Submit order to backend
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    // Client-side validation
+    const validationErrors = validateOrderQuantities();
+    if (validationErrors.length > 0) {
+      alert(`Cannot fulfill order due to insufficient inventory:\n${validationErrors.join('\n')}`);
+      return;
+    }
+
     try {
-      const res = await fetch("http://localhost:5000/api/orders", {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Authentication required. Please login again.');
+        return;
+      }
+
+      const res = await fetch("/api/orders", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
         body: JSON.stringify(form)
       });
 
-      if (!res.ok) throw new Error("Failed to create order");
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Failed to create order");
+      }
 
       alert("Order added successfully!");
       navigate("/AdminDashboard/orders");
     } catch (error) {
       console.error("Error adding order:", error);
-      alert("Error adding order");
+      alert(`Error adding order: ${error.message}`);
     }
   };
 
@@ -99,6 +153,10 @@ const AddOrder = () => {
 
         {/* Order Items Table */}
         <h5 className="mb-3">Order Items</h5>
+        
+        {loading && <p>Loading menu items...</p>}
+        {error && <p style={{color: 'red'}}>Error: {error}</p>}
+        
         <div className="table-responsive">
           <table className="items-table">
             <thead>
@@ -112,20 +170,21 @@ const AddOrder = () => {
               {form.items.map((orderItem, index) => (
                 <tr key={index}>
                   <td>
-                    <select
-                      value={orderItem.item}
-                      onChange={(e) =>
-                        handleChange(index, "item", e.target.value)
-                      }
-                      required
-                    >
-                      <option value="">Select Item</option>
-                      {itemsList.map((menuItem) => (
-                        <option key={menuItem._id} value={menuItem._id}>
-                          {menuItem.name}
-                        </option>
-                      ))}
-                    </select>
+                                         <select
+                       value={orderItem.item}
+                       onChange={(e) =>
+                         handleChange(index, "item", e.target.value)
+                       }
+                       required
+                       disabled={loading}
+                     >
+                       <option value="">{loading ? 'Loading...' : 'Select Item'}</option>
+                                               {itemsList.map((menuItem) => (
+                          <option key={menuItem._id} value={menuItem._id}>
+                            {menuItem.name} - ${menuItem.price} (Stock: {menuItem.currentStock})
+                          </option>
+                        ))}
+                     </select>
                   </td>
                   <td>
                     <input
@@ -137,6 +196,17 @@ const AddOrder = () => {
                       }
                       required
                     />
+                    {orderItem.item && (() => {
+                      const menuItem = itemsList.find(item => item._id === orderItem.item);
+                      if (menuItem && orderItem.quantity > menuItem.currentStock) {
+                        return (
+                          <div style={{ color: 'red', fontSize: '0.8rem', marginTop: '5px' }}>
+                            ⚠️ Insufficient stock! Only {menuItem.currentStock} available
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                   </td>
                   <td>
                     <button
@@ -166,6 +236,48 @@ const AddOrder = () => {
         >
           + Add Item
         </button>
+
+        {/* Order Summary */}
+        {form.items.some(item => item.item) && (
+          <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '5px' }}>
+            <h6>Order Summary:</h6>
+            <div style={{ marginBottom: '10px' }}>
+              <strong>Total Items:</strong> {form.items.filter(item => item.item).length}
+            </div>
+            {(() => {
+              const stockWarnings = [];
+              let totalValue = 0;
+              
+              form.items.forEach(orderItem => {
+                if (orderItem.item) {
+                  const menuItem = itemsList.find(item => item._id === orderItem.item);
+                  if (menuItem) {
+                    totalValue += menuItem.price * orderItem.quantity;
+                    if (orderItem.quantity > menuItem.currentStock) {
+                      stockWarnings.push(`${menuItem.name}: ${orderItem.quantity} requested, ${menuItem.currentStock} available`);
+                    }
+                  }
+                }
+              });
+              
+              return (
+                <>
+                  <div style={{ marginBottom: '10px' }}>
+                    <strong>Total Value:</strong> ${totalValue.toFixed(2)}
+                  </div>
+                  {stockWarnings.length > 0 && (
+                    <div style={{ color: 'red', fontSize: '0.9rem' }}>
+                      <strong>Stock Warnings:</strong>
+                      {stockWarnings.map((warning, index) => (
+                        <div key={index}>• {warning}</div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
 
         {/* Submit & Cancel Buttons */}
         <div className="modal-buttons">

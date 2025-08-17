@@ -59,6 +59,15 @@ class InventoryAnalysis(BaseModel):
     low_stock: List[str]
     summary: str
 
+class OrderAnalysis(BaseModel):
+    dish_name: str
+    quantity: int
+    required_ingredients: List[Dict[str, any]]
+    missing_ingredients: List[Dict[str, any]]
+    low_stock_ingredients: List[Dict[str, any]]
+    can_fulfill: bool
+    restock_recommendations: List[str]
+
 class LLMResponse(BaseModel):
     answer: str
 
@@ -98,6 +107,58 @@ def is_restaurant_query(text: str) -> bool:
         "database", "report", "summary", "total", "count", "show", "list", "what", "how many"
     ]
     return any(word in text.lower() for word in keywords)
+
+def is_order_request(text: str) -> bool:
+    """
+    Detect if the user is asking about placing an order
+    """
+    order_keywords = [
+        "order", "customer order", "want to order", "need to make", "fulfill order",
+        "can we make", "do we have enough", "restock", "inventory check"
+    ]
+    return any(keyword in text.lower() for keyword in order_keywords)
+
+def extract_order_details(text: str) -> Optional[Dict[str, any]]:
+    """
+    Extract order details from user text
+    Examples: "150 pizzas", "order 50 burgers", "customer wants 25 cakes"
+    """
+    try:
+        # Look for quantity patterns
+        quantity_patterns = [
+            r'(\d+)\s*(pizza|pizzas|burger|burgers|cake|cakes|dish|dishes|meal|meals)',
+            r'order\s+(\d+)\s*(pizza|pizzas|burger|burgers|cake|cakes|dish|dishes|meal|meals)',
+            r'(\d+)\s*(pizza|pizzas|burger|burgers|cake|cakes|dish|dishes|meal|meals)\s*order',
+            r'customer\s+(?:wants|ordered|needs)\s+(\d+)\s*(pizza|pizzas|burger|burgers|cake|cakes|dish|dishes|meal|meals)'
+        ]
+        
+        for pattern in quantity_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                quantity = int(match.group(1))
+                item_type = match.group(2).lower()
+                
+                # Determine the specific dish name
+                if 'pizza' in item_type:
+                    dish_name = 'pizza'
+                elif 'burger' in item_type:
+                    dish_name = 'hamburger'
+                elif 'cake' in item_type:
+                    dish_name = 'cake'
+                else:
+                    dish_name = 'dish'
+                
+                return {
+                    'dish_name': dish_name,
+                    'quantity': quantity,
+                    'original_text': text
+                }
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error extracting order details: {e}")
+        return None
 
 def get_inventory() -> Dict[str, int]:
     try:
@@ -178,7 +239,7 @@ def analyze_inventory(ingredients: List[str], inventory: Dict[str, int]) -> Inve
         closest = find_closest(ing, list(inventory.keys()))
         if closest and inventory.get(closest, 0) > 0:
             available.append(f"{closest} ({inventory[closest]})")
-            if inventory[closest] <= 2:
+            if inventory.get(closest, 0) <= 2:
                 low_stock.append(closest)
         else:
             missing.append(ing)
@@ -187,6 +248,122 @@ def analyze_inventory(ingredients: List[str], inventory: Dict[str, int]) -> Inve
         f"Missing: {', '.join(missing)}"
     )
     return InventoryAnalysis(available=available, missing=missing, low_stock=low_stock, summary=summary)
+
+def analyze_order_fulfillment(dish_name: str, quantity: int, recipe_ingredients: List[str], inventory: Dict[str, int]) -> OrderAnalysis:
+    """
+    Analyze if an order can be fulfilled and provide restocking recommendations
+    """
+    required_ingredients = []
+    missing_ingredients = []
+    low_stock_ingredients = []
+    restock_recommendations = []
+    
+    # Parse recipe ingredients and match with inventory
+    for ingredient_text in recipe_ingredients:
+        # Extract ingredient name and quantity from text like "2 cups flour" or "1 lb beef"
+        ingredient_info = parse_ingredient_text(ingredient_text)
+        if ingredient_info:
+            ingredient_name = ingredient_info['name']
+            base_quantity = ingredient_info['quantity']
+            unit = ingredient_info['unit']
+            
+            # Calculate total required quantity
+            total_required = base_quantity * quantity
+            
+            # Find matching ingredient in inventory
+            closest_match = find_closest(ingredient_name, list(inventory.keys()))
+            
+            if closest_match:
+                available_stock = inventory[closest_match]
+                required_ingredients.append({
+                    'name': closest_match,
+                    'required': total_required,
+                    'available': available_stock,
+                    'unit': unit,
+                    'status': 'available' if available_stock >= total_required else 'insufficient'
+                })
+                
+                if available_stock < total_required:
+                    missing_ingredients.append({
+                        'name': closest_match,
+                        'required': total_required,
+                        'available': available_stock,
+                        'unit': unit,
+                        'shortage': total_required - available_stock
+                    })
+                    restock_recommendations.append(f"Restock {closest_match}: Need {total_required} {unit}, have {available_stock} {unit}")
+                elif available_stock <= total_required * 0.2:  # Less than 20% buffer
+                    low_stock_ingredients.append({
+                        'name': closest_match,
+                        'required': total_required,
+                        'available': available_stock,
+                        'unit': unit
+                    })
+                    restock_recommendations.append(f"Low stock warning: {closest_match} - {available_stock} {unit} remaining")
+            else:
+                missing_ingredients.append({
+                    'name': ingredient_name,
+                    'required': total_required,
+                    'available': 0,
+                    'unit': unit,
+                    'shortage': total_required
+                })
+                restock_recommendations.append(f"Add {ingredient_name} to inventory: Need {total_required} {unit}")
+    
+    can_fulfill = len(missing_ingredients) == 0
+    
+    return OrderAnalysis(
+        dish_name=dish_name,
+        quantity=quantity,
+        required_ingredients=required_ingredients,
+        missing_ingredients=missing_ingredients,
+        low_stock_ingredients=low_stock_ingredients,
+        can_fulfill=can_fulfill,
+        restock_recommendations=restock_recommendations
+    )
+
+def parse_ingredient_text(ingredient_text: str) -> Optional[Dict[str, any]]:
+    """
+    Parse ingredient text to extract name, quantity, and unit
+    Examples: "2 cups flour", "1 lb beef", "3 large eggs"
+    """
+    try:
+        # Remove extra whitespace
+        text = ingredient_text.strip()
+        
+        # Common quantity patterns
+        quantity_patterns = [
+            r'^(\d+(?:\.\d+)?)\s*(cup|cups|tbsp|tsp|oz|lb|g|kg|ml|l|piece|pieces|large|medium|small)\s+(.+)',
+            r'^(\d+(?:\.\d+)?)\s*(.+)',
+            r'^(\d+)\s*(.+)'
+        ]
+        
+        for pattern in quantity_patterns:
+            match = re.match(pattern, text, re.IGNORECASE)
+            if match:
+                quantity = float(match.group(1))
+                unit = match.group(2) if len(match.groups()) > 2 else 'unit'
+                name = match.group(3) if len(match.groups()) > 2 else match.group(2)
+                
+                # Clean up the name
+                name = re.sub(r'^(cup|cups|tbsp|tsp|oz|lb|g|kg|ml|l|piece|pieces|large|medium|small)\s+', '', name, flags=re.IGNORECASE)
+                
+                return {
+                    'name': name.strip(),
+                    'quantity': quantity,
+                    'unit': unit.lower()
+                }
+        
+        # If no pattern matches, assume it's just an ingredient name
+        return {
+            'name': text,
+            'quantity': 1,
+            'unit': 'unit'
+        }
+        
+    except Exception as e:
+        print(f"Error parsing ingredient text '{ingredient_text}': {e}")
+        return None
 
 def extract_ingredients_from_text(text: str) -> List[str]:
     if not text:
@@ -334,6 +511,13 @@ async def handle_user_query(user_text: str) -> str:
     if "error" in inventory:
         return inventory["error"]
 
+    # Check if this is an order request
+    if is_order_request(user_text):
+        order_details = extract_order_details(user_text)
+        if order_details:
+            return await process_order_request(order_details, inventory)
+    
+    # Regular recipe/inventory query
     dish_match = re.search(r"(?:recipe for|ingredients of|how to make)\s+([a-zA-Z\s]+)", user_text.lower())
     dish_name = dish_match.group(1).strip() if dish_match else None
 
@@ -415,6 +599,105 @@ async def handle_user_query(user_text: str) -> str:
             return "The AI service has reached its usage limit. Please try again later or contact support."
         else:
             return f"Assistant error: {str(e)}"
+
+async def process_order_request(order_details: Dict[str, any], inventory: Dict[str, int]) -> str:
+    """
+    Process an order request and provide inventory analysis
+    """
+    try:
+        dish_name = order_details['dish_name']
+        quantity = order_details['quantity']
+        
+        # Get recipe from web
+        web_recipe = get_recipe_from_web(dish_name)
+        
+        if not web_recipe or not web_recipe.ingredients:
+            # Fallback to basic ingredient requirements
+            if dish_name == 'pizza':
+                basic_ingredients = [
+                    "2 cups flour", "1 cup water", "1 tsp yeast", "1 cup tomato sauce", 
+                    "2 cups cheese", "1 cup toppings"
+                ]
+            elif dish_name == 'hamburger':
+                basic_ingredients = [
+                    "1 lb ground beef", "4 burger buns", "1 cup lettuce", "1 cup tomatoes", 
+                    "1 cup onions", "1 cup cheese"
+                ]
+            elif dish_name == 'cake':
+                basic_ingredients = [
+                    "2 cups flour", "1 cup sugar", "1 cup milk", "3 eggs", 
+                    "1/2 cup butter", "1 tsp vanilla"
+                ]
+            else:
+                basic_ingredients = ["1 cup main ingredient", "1 cup seasoning", "1 cup garnish"]
+            
+            web_recipe = RecipeModel(
+                dish_name=dish_name,
+                ingredients=basic_ingredients,
+                instructions=f"Standard {dish_name} preparation method"
+            )
+        
+        # Analyze order fulfillment
+        order_analysis = analyze_order_fulfillment(
+            dish_name, quantity, web_recipe.ingredients, inventory
+        )
+        
+        # Build response
+        response_parts = []
+        
+        # Header
+        response_parts.append(f"🍽️ **ORDER ANALYSIS: {quantity}x {dish_name.title()}**")
+        response_parts.append("=" * 50)
+        
+        # Recipe information
+        response_parts.append(f"\n📋 **Recipe Ingredients (per {dish_name}):**")
+        for ingredient in web_recipe.ingredients:
+            response_parts.append(f"  • {ingredient}")
+        
+        # Inventory analysis
+        response_parts.append(f"\n📊 **Inventory Analysis for {quantity}x {dish_name}:**")
+        
+        if order_analysis.can_fulfill:
+            response_parts.append("✅ **ORDER CAN BE FULFILLED!**")
+            
+            if order_analysis.low_stock_ingredients:
+                response_parts.append("\n⚠️ **Low Stock Warnings:**")
+                for ingredient in order_analysis.low_stock_ingredients:
+                    response_parts.append(f"  • {ingredient['name']}: {ingredient['available']} {ingredient['unit']} remaining")
+        else:
+            response_parts.append("❌ **ORDER CANNOT BE FULFILLED**")
+            
+            response_parts.append("\n🚨 **Missing/Insufficient Ingredients:**")
+            for ingredient in order_analysis.missing_ingredients:
+                response_parts.append(f"  • {ingredient['name']}: Need {ingredient['required']} {ingredient['unit']}, have {ingredient['available']} {ingredient['unit']}")
+        
+        # Restocking recommendations
+        if order_analysis.restock_recommendations:
+            response_parts.append(f"\n🔄 **Restocking Recommendations:**")
+            for rec in order_analysis.restock_recommendations:
+                response_parts.append(f"  • {rec}")
+        
+        # Current inventory status
+        response_parts.append(f"\n📦 **Current Inventory Status:**")
+        for ingredient_name, stock in inventory.items():
+            if stock <= 5:  # Show low stock items
+                response_parts.append(f"  • {ingredient_name}: {stock} units (LOW STOCK)")
+        
+        # Action items
+        response_parts.append(f"\n🎯 **Next Steps:**")
+        if order_analysis.can_fulfill:
+            response_parts.append("1. ✅ Proceed with order fulfillment")
+            if order_analysis.low_stock_ingredients:
+                response_parts.append("2. ⚠️ Plan restocking for low stock items")
+        else:
+            response_parts.append("1. ❌ Order cannot be fulfilled")
+            response_parts.append("2. 🔄 Restock missing ingredients")
+            response_parts.append("3. 📋 Re-evaluate after restocking")
+        
+        return '\n'.join(response_parts)
+        
+    except Exception as e:
+        return f"Error processing order request: {str(e)}"
 
 # ---------------- ENTRY POINT ----------------
 if __name__ == "__main__":

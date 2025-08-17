@@ -1,25 +1,35 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 
 function AdminLogin() {
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
 
-    // Dummy credentials — replace with backend logic later
-    const adminEmail = 'admin@example.com';
-    const adminPassword = 'admin123';
+    try {
+      // Authenticate with the provided credentials
+      const response = await axios.post('/api/auth/login', {
+        phoneNumber: phoneNumber,
+        password: password
+      });
 
-    if (email === adminEmail && password === adminPassword) {
-      localStorage.setItem('adminLoggedIn', 'true');
-      navigate('/AdminDashboard');
-    } else {
-      setErrorMsg('Invalid email or password');
+      if (response.data.token) {
+        // Store the JWT token
+        localStorage.setItem('token', response.data.token);
+        localStorage.setItem('adminLoggedIn', 'true');
+        navigate('/AdminDashboard');
+      } else {
+        setErrorMsg('Login failed - no token received');
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      setErrorMsg('Login failed. Please check your credentials.');
     }
   };
 
@@ -31,10 +41,10 @@ function AdminLogin() {
         {errorMsg && <p style={styles.error}>{errorMsg}</p>}
 
         <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          type="tel"
+          placeholder="Phone Number"
+          value={phoneNumber}
+          onChange={(e) => setPhoneNumber(e.target.value)}
           required
           style={styles.input}
         />
@@ -48,7 +58,12 @@ function AdminLogin() {
           style={styles.input}
         />
 
-        <button type="submit"  style={styles.button}>Login</button>
+        <button type="submit" style={styles.button}>Login</button>
+        
+        <div style={{ textAlign: 'center', fontSize: '0.8rem', color: '#666', marginTop: '10px' }}>
+          <p>Test Credentials:</p>
+          <p>Phone: 1234567890 | Password: password123</p>
+        </div>
       </form>
     </div>
   );

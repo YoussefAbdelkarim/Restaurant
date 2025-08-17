@@ -34,10 +34,22 @@ export default function Orders() {
   const fetchOrders = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('http://localhost:5000/api/orders'); // Replace with your API
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.error('No authentication token found');
+        setLoading(false);
+        return;
+      }
+      
+      const response = await axios.get('/api/orders', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setOrders(response.data);
     } catch (error) {
       console.error('Error fetching orders:', error);
+      if (error.response?.status === 401) {
+        console.error('Authentication failed - please login again');
+      }
     } finally {
       setLoading(false);
     }
@@ -69,7 +81,15 @@ export default function Orders() {
   const handleEditItemSubmit = async (e) => {
     e.preventDefault();
     try {
-      await axios.put(`http://localhost:5000/api/orders/${editFormData._id}`, editFormData);
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Authentication required');
+        return;
+      }
+      
+      await axios.put(`/api/orders/${editFormData._id}`, editFormData, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setOrders(prevOrders =>
         prevOrders.map(order => (order._id === editFormData._id ? editFormData : order))
       );
@@ -85,7 +105,15 @@ export default function Orders() {
   const handleDelete = async (_id) => {
     if (window.confirm('Are you sure you want to delete this order?')) {
       try {
-        await axios.delete(`http://localhost:5000/api/orders/${_id}`);
+        const token = localStorage.getItem('token');
+        if (!token) {
+          alert('Authentication required');
+          return;
+        }
+        
+        await axios.delete(`/api/orders/${_id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
         setOrders(prevOrders => prevOrders.filter(order => order._id !== _id));
       } catch (error) {
         console.error('Error deleting order:', error);
@@ -98,13 +126,22 @@ export default function Orders() {
   const handleFilter = async () => {
     try {
       setLoading(true);
-      let url = 'http://localhost:5000/api/orders?';
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Authentication required');
+        setLoading(false);
+        return;
+      }
+      
+      let url = '/api/orders?';
       if (startDate) url += `startDate=${startDate}&`;
       if (endDate) url += `endDate=${endDate}&`;
       if (statusFilter) url += `status=${statusFilter}&`;
       url = url.endsWith('&') ? url.slice(0, -1) : url;
 
-      const res = await axios.get(url);
+      const res = await axios.get(url, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setOrders(res.data);
     } catch (error) {
       console.error(error);

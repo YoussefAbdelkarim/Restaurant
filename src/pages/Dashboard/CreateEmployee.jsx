@@ -21,7 +21,7 @@ const CreateEmployee = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await axios.post('http://localhost:5000/api/auth/create', formData);
+      const res = await axios.post('/api/auth/create', formData);
       if (res.status === 201 || res.status === 200) {
         alert('User created successfully!');
         setFormData({
