@@ -1,3 +1,6 @@
+#app {
+  padding-top: 56px; /* height of fixed navbar */
+}
 .App {
   text-align: center;
 }
@@ -40,6 +43,11 @@ img {
   }
 }
 
+@media (max-width: 991.98px) {
+  #app {
+    padding-top: 112px; /* if navbar height doubles on mobile */
+  }
+}
 
 /* Active light blue link */
 .active-link-blue {
@@ -94,4 +102,10 @@ img {
 
 .hamburger:hover span {
   background-color: #0d6efd; /* Darker blue on hover */
+}
+#page-content {
+  /* Make sure this container takes full width */
+  width: 100%;
+  /* You can tune this padding to match your navbar height */
+  padding-top: 70px; /* example */
 }

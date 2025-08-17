@@ -25,27 +25,40 @@ function App() {
           <Container>
             <Navbar.Brand>
               <Link to='/' className='navbar-brand text-success d-flex align-items-center'>
-                <FontAwesomeIcon icon={faUtensils} size='xl' className="text-danger" />
+               <FontAwesomeIcon icon={faUtensils} size='xl' className="text-danger"  style={{ marginRight: '10px' }} />
 
-                <span className='nav-link text-uppercase text-danger text-center fw-semibold'>
-                  Korlake
-                  <br />
-                  Restaurant
-                </span>
+                 <span
+  className="nav-link text-uppercase text-center fw-semibold"
+  style={{ color: '#000000ff', lineHeight: '1', display: 'inline-block' }}
+>
+  Flavor
+  <span style={{ color: '#ffc300', display: 'block', lineHeight: '1' }}>Hub</span>
+</span>
               </Link>
             </Navbar.Brand>
-            <Navbar.Toggle aria-controls='basic-navbar-nav' />
+           <Navbar.Toggle aria-controls='basic-navbar-nav' />
             <Navbar.Collapse className='text-center' id='basiv-navbar-nav'>
               <Nav className='me-auto justify-content-center w-100'>
-                <Link to='/' className='nav-link text-uppercase text-danger text-center fw-semibold'>Home</Link>
-                <Link to='/menu' className='nav-link text-uppercase text-danger text-center fw-semibold'>Menu</Link>
-                <Link to='/about' className='nav-link text-uppercase text-danger text-center fw-semibold'>About</Link>
+                <Link
+  to="/"
+  className="nav-link text-uppercase text-center fw-semibold"
+  style={{ color: '#000000ff' }}
+>Home</Link>
+                <Link 
+                to='/menu' 
+                  className="nav-link text-uppercase text-center fw-semibold"
+                  style={{ color: '#000000ff' }}
+                >Menu</Link>
+                <Link
+                 to='/about'
+                 className="nav-link text-uppercase text-center fw-semibold"
+                  style={{ color: '#000000ff' }}
+                  >About</Link>
               </Nav>
               <Link to='/contact'>
                 <button
                   type='button'
-                  className='btn btn-danger btn-lg rounded-0 text-capitalize mx-2 mb-3 mb-sm-0'
-                >
+                  className='custom-btn'>
                   Book a table
                 </button>
               </Link>
