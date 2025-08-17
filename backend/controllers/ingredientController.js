@@ -1,11 +1,10 @@
 const Ingredient = require('../models/Ingredient');
 
-// Create ingredient
 const createIngredient = async (req, res) => {
   const { name, unit } = req.body;
 
-  if (!name || !unit) {
-    return res.status(400).json({ message: 'Name and unit are required' });
+  if (!name || !unit ) {
+    return res.status(400).json({ message: 'Name, unit and currentStock are required' });
   }
 
   try {
@@ -16,7 +15,6 @@ const createIngredient = async (req, res) => {
   }
 };
 
-// Get all ingredients
 const getIngredients = async (req, res) => {
   try {
     const ingredients = await Ingredient.find();
@@ -26,7 +24,6 @@ const getIngredients = async (req, res) => {
   }
 };
 
-// Get one ingredient by ID
 const getIngredientById = async (req, res) => {
   try {
     const ingredient = await Ingredient.findById(req.params.id);
@@ -37,7 +34,6 @@ const getIngredientById = async (req, res) => {
   }
 };
 
-// Update ingredient
 const updateIngredient = async (req, res) => {
   try {
     const ingredient = await Ingredient.findByIdAndUpdate(
@@ -52,7 +48,6 @@ const updateIngredient = async (req, res) => {
   }
 };
 
-// Delete ingredient
 const deleteIngredient = async (req, res) => {
   try {
     const ingredient = await Ingredient.findByIdAndDelete(req.params.id);

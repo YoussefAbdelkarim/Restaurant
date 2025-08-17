@@ -28,6 +28,10 @@ const itemSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    cost:{
+      type: Number,
+      required: true,
+    },
     price: {
       type: Number,
       required: true,
@@ -48,9 +52,13 @@ const itemSchema = new mongoose.Schema(
       default: true,
     },
 
-    soldCount: {
+    currentStock: {
       type: Number,
-      default: 0,
+      default: 100,
+    },
+    alertThreshold: {
+      type: Number,
+      default: 20,
     },
   },
   {
