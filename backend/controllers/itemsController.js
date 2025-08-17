@@ -37,7 +37,7 @@ const createItem = async (req, res) => {
 
 const getItems = async (req, res) => {
   try {
-    const items = await Item.find({}).populate('ingredients.ingredient', 'name unit');
+    const items = await Item.find({});
     res.json(items);
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -46,7 +46,7 @@ const getItems = async (req, res) => {
 
 const getItemById = async (req, res) => {
   try {
-    const item = await Item.findById(req.params.id).populate('ingredients.ingredient', 'name unit');
+    const item = await Item.findById(req.params.id);
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
     }

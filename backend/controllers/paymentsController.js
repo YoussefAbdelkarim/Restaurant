@@ -80,10 +80,40 @@ const getPayments = async (req, res) => {
   try {
     const { type, startDate, endDate } = req.query;
 
+    // If no type specified, return all payments
     if (!type) {
-      return res
-        .status(400)
-        .json({ message: 'Query param "type" is required: salary | purchase' });
+      const filter = {};
+      if (startDate || endDate) {
+        filter.date = {};
+        if (startDate) filter.date.$gte = new Date(startDate);
+        if (endDate) filter.date.$lte = new Date(endDate);
+      }
+
+      const payments = await Payment.find(filter)
+        .populate('user', 'name')
+        .sort({ date: -1 });
+
+      const formattedPayments = payments.map(payment => {
+        const formatted = {
+          _id: payment._id,
+          type: payment.type,
+          amount: payment.amount,
+          date: payment.date,
+          notes: payment.notes
+        };
+
+        if (payment.type === 'salary') {
+          formatted.employeeName = payment.user?.name || 'Unknown Employee';
+        } else if (payment.type === 'purchase') {
+          formatted.itemName = payment.itemName;
+          formatted.quantity = payment.quantity;
+          formatted.unitPrice = payment.unitPrice;
+        }
+
+        return formatted;
+      });
+
+      return res.json(formattedPayments);
     }
 
     if (type === 'salary') {

@@ -1,5 +1,6 @@
 const Order = require('../models/Order');
 const Item = require('../models/Item');
+const InventoryService = require('../services/inventoryService');
 
 exports.createOrder = async (req, res) => {
   try {
@@ -9,24 +10,57 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ message: 'Order must have at least one item' });
     }
 
-
     let totalPrice = 0;
     const orderItems = [];
 
+    // Process each item and calculate total price
     for (const ordered of items) {
-      const itemData = await Item.findById(ordered.item);
-      if (!itemData) {
-        return res.status(404).json({ message: `Item not found: ${ordered.item}` });
+      let itemData;
+      
+      // Try to find item by ID first
+      if (ordered.item) {
+        itemData = await Item.findById(ordered.item);
+      }
+      
+      // If not found by ID, try to find by name
+      if (!itemData && ordered.name) {
+        itemData = await Item.findOne({ 
+          name: { $regex: new RegExp(ordered.name, 'i') } 
+        });
       }
 
-      const priceAtSale = itemData.price;
-      totalPrice += priceAtSale * ordered.quantity;
+      // If still no item found, we'll create a virtual item for pricing
+      if (!itemData) {
+        // Use a default price or get from recipe if available
+        const defaultPrice = ordered.priceAtSale || 0;
+        totalPrice += defaultPrice * ordered.quantity;
+        
+        orderItems.push({
+          item: null, // No item ID since it doesn't exist
+          name: ordered.name,
+          quantity: ordered.quantity,
+          priceAtSale: defaultPrice
+        });
+      } else {
+        const priceAtSale = itemData.price;
+        totalPrice += priceAtSale * ordered.quantity;
 
-      orderItems.push({
-        item: itemData._id,
-        name: itemData.name,
-        quantity: ordered.quantity,
-        priceAtSale
+        orderItems.push({
+          item: itemData._id,
+          name: itemData.name,
+          quantity: ordered.quantity,
+          priceAtSale
+        });
+      }
+    }
+
+    // Process inventory before creating the order
+    const inventoryResult = await InventoryService.processOrderInventory(orderItems);
+    
+    if (!inventoryResult.success) {
+      return res.status(400).json({ 
+        message: 'Cannot fulfill order due to insufficient inventory',
+        errors: inventoryResult.errors
       });
     }
 
@@ -37,7 +71,15 @@ exports.createOrder = async (req, res) => {
     });
 
     const savedOrder = await newOrder.save();
-    res.status(201).json(savedOrder);
+    
+    // Return order with inventory processing details
+    res.status(201).json({
+      order: savedOrder,
+      inventory: {
+        processed: inventoryResult.processedItems,
+        warnings: inventoryResult.warnings
+      }
+    });
 
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
