@@ -7,7 +7,8 @@ const protectedRoutes = require('./routes/protectedRoutes');
 const ingredientRoutes = require('./routes/ingredientRoutes');
 const itemRoutes = require('./routes/itemRoutes');
 const orderRoutes = require('./routes/orderRoutes');
-const assistantRoutes = require('./routes/assistantRoutes'); //assistant route
+const assistantRoutes = require('./routes/assistantRoutes'); 
+const paymentsRoutes = require('./routes/paymentsRoutes');
 
 const app = express();
 
@@ -20,7 +21,9 @@ app.use('/api/items', itemRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/protected', protectedRoutes);
 app.use('/api/orders', orderRoutes);
-app.use('/api/assistant', assistantRoutes); //assistant route
+app.use('/api/assistant', assistantRoutes); 
+app.use('/api/payments', paymentsRoutes);
+
 app.get('/', (req, res) => {
   res.send('Restaurant API is running ');
 });
