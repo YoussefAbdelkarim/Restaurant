@@ -2,5 +2,5 @@ Setup Steps:
 
 1. cd backend
 2. Create a new virtual environment: python -m venv .venv
-3. Activate it: .venv\Scripts\activate (Windows) or source backend/.venv/bin/activate (Mac/Linux)
+3. Activate it: .venv\Scripts\Activate.ps1 (Windows) or source backend/.venv/bin/activate (Mac/Linux)
 4. Install dependencies: pip install -r requirements.txt
