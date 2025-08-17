@@ -3,7 +3,7 @@ import json
 import asyncio
 import requests
 import certifi
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from dotenv import load_dotenv
 from pymongo import MongoClient
 import re
@@ -34,16 +34,18 @@ load_dotenv("../.env")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     raise ValueError("Missing GOOGLE_API_KEY in environment")
-genai.configure(api_key=GOOGLE_API_KEY)
+# genai.configure(api_key=GOOGLE_API_KEY)  # Commented out due to version compatibility
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "test")
 
-mongo_kwargs = {"serverSelectionTimeoutMS": 5000}
+mongo_kwargs: Dict[str, Any] = {"serverSelectionTimeoutMS": 5000}
 if "mongodb.net" in MONGO_URI or MONGO_URI.startswith("mongodb+srv://"):
-    mongo_kwargs.update({"tls": True, "tlsCAFile": certifi.where()})
+    mongo_kwargs["tls"] = True
+    mongo_kwargs["tlsCAFile"] = certifi.where()
 
-db = MongoClient(MONGO_URI, **mongo_kwargs)[MONGO_DB]
+client = MongoClient(MONGO_URI, **mongo_kwargs)
+db = client[MONGO_DB]
 
 # ---------------- MODELS ----------------
 class RecipeModel(BaseModel):
@@ -62,9 +64,9 @@ class InventoryAnalysis(BaseModel):
 class OrderAnalysis(BaseModel):
     dish_name: str
     quantity: int
-    required_ingredients: List[Dict[str, any]]
-    missing_ingredients: List[Dict[str, any]]
-    low_stock_ingredients: List[Dict[str, any]]
+    required_ingredients: List[Dict[str, Any]]
+    missing_ingredients: List[Dict[str, Any]]
+    low_stock_ingredients: List[Dict[str, Any]]
     can_fulfill: bool
     restock_recommendations: List[str]
 
@@ -118,7 +120,7 @@ def is_order_request(text: str) -> bool:
     ]
     return any(keyword in text.lower() for keyword in order_keywords)
 
-def extract_order_details(text: str) -> Optional[Dict[str, any]]:
+def extract_order_details(text: str) -> Optional[Dict[str, Any]]:
     """
     Extract order details from user text
     Examples: "150 pizzas", "order 50 burgers", "customer wants 25 cakes"
@@ -160,7 +162,7 @@ def extract_order_details(text: str) -> Optional[Dict[str, any]]:
         print(f"Error extracting order details: {e}")
         return None
 
-def get_inventory() -> Dict[str, int]:
+def get_inventory() -> Dict[str, Any]:
     try:
         inventory = {}
         for doc in db["ingredients"].find({}):
@@ -233,7 +235,7 @@ def find_closest(name: str, keys: List[str]) -> Optional[str]:
     matches = get_close_matches(name.lower(), keys, n=1, cutoff=0.6)
     return matches[0] if matches else None
 
-def analyze_inventory(ingredients: List[str], inventory: Dict[str, int]) -> InventoryAnalysis:
+def analyze_inventory(ingredients: List[str], inventory: Dict[str, Any]) -> InventoryAnalysis:
     available, missing, low_stock = [], [], []
     for ing in ingredients:
         closest = find_closest(ing, list(inventory.keys()))
@@ -322,7 +324,7 @@ def analyze_order_fulfillment(dish_name: str, quantity: int, recipe_ingredients:
         restock_recommendations=restock_recommendations
     )
 
-def parse_ingredient_text(ingredient_text: str) -> Optional[Dict[str, any]]:
+def parse_ingredient_text(ingredient_text: str) -> Optional[Dict[str, Any]]:
     """
     Parse ingredient text to extract name, quantity, and unit
     Examples: "2 cups flour", "1 lb beef", "3 large eggs"
@@ -600,7 +602,7 @@ async def handle_user_query(user_text: str) -> str:
         else:
             return f"Assistant error: {str(e)}"
 
-async def process_order_request(order_details: Dict[str, any], inventory: Dict[str, int]) -> str:
+async def process_order_request(order_details: Dict[str, Any], inventory: Dict[str, Any]) -> str:
     """
     Process an order request and provide inventory analysis
     """
@@ -646,53 +648,53 @@ async def process_order_request(order_details: Dict[str, any], inventory: Dict[s
         response_parts = []
         
         # Header
-        response_parts.append(f"🍽️ **ORDER ANALYSIS: {quantity}x {dish_name.title()}**")
+        response_parts.append(f"**ORDER ANALYSIS: {quantity}x {dish_name.title()}**")
         response_parts.append("=" * 50)
         
         # Recipe information
-        response_parts.append(f"\n📋 **Recipe Ingredients (per {dish_name}):**")
+        response_parts.append(f"\n**Recipe Ingredients (per {dish_name}):**")
         for ingredient in web_recipe.ingredients:
             response_parts.append(f"  • {ingredient}")
         
         # Inventory analysis
-        response_parts.append(f"\n📊 **Inventory Analysis for {quantity}x {dish_name}:**")
+        response_parts.append(f"\n**Inventory Analysis for {quantity}x {dish_name}:**")
         
         if order_analysis.can_fulfill:
-            response_parts.append("✅ **ORDER CAN BE FULFILLED!**")
+            response_parts.append("**ORDER CAN BE FULFILLED!**")
             
             if order_analysis.low_stock_ingredients:
-                response_parts.append("\n⚠️ **Low Stock Warnings:**")
+                response_parts.append("\n**Low Stock Warnings:**")
                 for ingredient in order_analysis.low_stock_ingredients:
                     response_parts.append(f"  • {ingredient['name']}: {ingredient['available']} {ingredient['unit']} remaining")
         else:
-            response_parts.append("❌ **ORDER CANNOT BE FULFILLED**")
+            response_parts.append("**ORDER CANNOT BE FULFILLED**")
             
-            response_parts.append("\n🚨 **Missing/Insufficient Ingredients:**")
+            response_parts.append("\n**Missing/Insufficient Ingredients:**")
             for ingredient in order_analysis.missing_ingredients:
                 response_parts.append(f"  • {ingredient['name']}: Need {ingredient['required']} {ingredient['unit']}, have {ingredient['available']} {ingredient['unit']}")
         
         # Restocking recommendations
         if order_analysis.restock_recommendations:
-            response_parts.append(f"\n🔄 **Restocking Recommendations:**")
+            response_parts.append(f"\n**Restocking Recommendations:**")
             for rec in order_analysis.restock_recommendations:
                 response_parts.append(f"  • {rec}")
         
         # Current inventory status
-        response_parts.append(f"\n📦 **Current Inventory Status:**")
+        response_parts.append(f"\n**Current Inventory Status:**")
         for ingredient_name, stock in inventory.items():
             if stock <= 5:  # Show low stock items
                 response_parts.append(f"  • {ingredient_name}: {stock} units (LOW STOCK)")
         
         # Action items
-        response_parts.append(f"\n🎯 **Next Steps:**")
+        response_parts.append(f"\n**Next Steps:**")
         if order_analysis.can_fulfill:
-            response_parts.append("1. ✅ Proceed with order fulfillment")
+            response_parts.append("1. Proceed with order fulfillment")
             if order_analysis.low_stock_ingredients:
-                response_parts.append("2. ⚠️ Plan restocking for low stock items")
+                response_parts.append("2. Plan restocking for low stock items")
         else:
-            response_parts.append("1. ❌ Order cannot be fulfilled")
-            response_parts.append("2. 🔄 Restock missing ingredients")
-            response_parts.append("3. 📋 Re-evaluate after restocking")
+            response_parts.append("1. Order cannot be fulfilled")
+            response_parts.append("2. Restock missing ingredients")
+            response_parts.append("3. Re-evaluate after restocking")
         
         return '\n'.join(response_parts)
         

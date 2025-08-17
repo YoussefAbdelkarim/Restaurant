@@ -211,8 +211,20 @@ export default function AnalyticsDashboard({ orders }) {
   };
 
   return (
-    <div>
-      <h3 className="mb-4">Restaurant Analytics Dashboard</h3>
+    <div style={{ 
+      backgroundColor: '#f8f9fa', 
+      padding: '20px', 
+      borderRadius: '10px',
+      minHeight: '100vh'
+    }}>
+      <h3 className="mb-4" style={{ 
+        textAlign: 'center', 
+        color: '#2c3e50', 
+        fontWeight: '600',
+        marginBottom: '30px'
+      }}>
+        📈 Restaurant Analytics Dashboard
+      </h3>
 
       {/* Select Period */}
       <div className="mb-4 d-flex align-items-center">
@@ -244,28 +256,58 @@ export default function AnalyticsDashboard({ orders }) {
       </div>
 
       {/* Revenue Chart */}
-      <div className="mb-5">
-        <h5>Revenue ({period === "daily" ? selectedDate : period})</h5>
+      <div className="mb-5" style={{
+        background: 'white',
+        padding: '20px',
+        borderRadius: '10px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+      }}>
+        <h5 style={{ color: '#2c3e50', marginBottom: '20px' }}>Revenue ({period === "daily" ? selectedDate : period})</h5>
         <Line ref={lineChartRef} data={lineDataWithForecast} />
       </div>
 
       {/* Best-Selling Dishes */}
-      <div className="mb-5" style={{ maxWidth: "350px", margin: "auto" }}>
-        <h5>Best-Selling Dishes</h5>
+      <div className="mb-5" style={{ 
+        maxWidth: "400px", 
+        margin: "auto",
+        background: 'white',
+        padding: '20px',
+        borderRadius: '10px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+      }}>
+        <h5 style={{ color: '#2c3e50', marginBottom: '20px', textAlign: 'center' }}>Best-Selling Dishes</h5>
         <Pie ref={pieChartRef} data={pieData} options={pieOptions} />
       </div>
 
       {/* Peak Hours */}
-      <div className="mb-5">
-        <h5>Peak Hours</h5>
+      <div className="mb-5" style={{
+        background: 'white',
+        padding: '20px',
+        borderRadius: '10px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+      }}>
+        <h5 style={{ color: '#2c3e50', marginBottom: '20px' }}>Peak Hours</h5>
         <Bar ref={peakHoursRef} data={peakHoursData} />
       </div>
 
       {/* Customer Insights */}
-      <div className="mb-5">
-        <h5>Customer Insights</h5>
-        <p>Total Orders: {totalOrders}</p>
-        <p>Average Order Value: ${avgOrderValue.toFixed(2)}</p>
+      <div className="mb-5" style={{
+        background: 'white',
+        padding: '20px',
+        borderRadius: '10px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+      }}>
+        <h5 style={{ color: '#2c3e50', marginBottom: '20px' }}>Customer Insights</h5>
+        <div style={{ display: 'flex', gap: '20px', justifyContent: 'center' }}>
+          <div style={{ textAlign: 'center', padding: '15px', background: '#e3f2fd', borderRadius: '8px', minWidth: '150px' }}>
+            <h6 style={{ color: '#1976d2', margin: '0' }}>Total Orders</h6>
+            <p style={{ fontSize: '24px', fontWeight: 'bold', margin: '10px 0 0 0', color: '#2c3e50' }}>{totalOrders}</p>
+          </div>
+          <div style={{ textAlign: 'center', padding: '15px', background: '#e8f5e8', borderRadius: '8px', minWidth: '150px' }}>
+            <h6 style={{ color: '#388e3c', margin: '0' }}>Avg Order Value</h6>
+            <p style={{ fontSize: '24px', fontWeight: 'bold', margin: '10px 0 0 0', color: '#2c3e50' }}>${avgOrderValue.toFixed(2)}</p>
+          </div>
+        </div>
       </div>
     </div>
   );

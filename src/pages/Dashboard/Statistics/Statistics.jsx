@@ -59,13 +59,13 @@ const Statistics = () => {
   return (
     <div
       style={{
-        padding: 30,
+        padding: "10px 30px 30px 30px",
         backgroundColor: "#f8f9fa",
         minHeight: "100vh",
         fontFamily: "'Inter', sans-serif",
       }}
     >
-      <h1 style={{ textAlign: "center", marginBottom: 40 }}>
+      <h1 style={{ textAlign: "center", marginBottom: 30, marginTop: 0 }}>
         📊 Restaurant Statistics Dashboard
       </h1>
 

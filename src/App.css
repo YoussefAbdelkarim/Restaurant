@@ -1,5 +1,5 @@
 #app {
-  padding-top: 56px; /* height of fixed navbar */
+  padding-top: 0 !important;
 }
 .App {
   text-align: center;
