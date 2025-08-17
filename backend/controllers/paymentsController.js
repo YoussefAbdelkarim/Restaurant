@@ -76,7 +76,6 @@ const createPayment = async (req, res) => {
   }
 };
 
-
 const getPayments = async (req, res) => {
   try {
     const { type, startDate, endDate } = req.query;
