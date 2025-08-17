@@ -3,7 +3,6 @@ const cors = require('cors');
 require('dotenv').config();
 const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
-const protectedRoutes = require('./routes/protectedRoutes');
 const ingredientRoutes = require('./routes/ingredientRoutes');
 const itemRoutes = require('./routes/itemRoutes');
 const orderRoutes = require('./routes/orderRoutes');
@@ -18,7 +17,6 @@ app.use(express.json());
 app.use('/api/ingredients', ingredientRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/auth', authRoutes);
-app.use('/api/protected', protectedRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/assistant', assistantRoutes); //assistant route
 app.get('/', (req, res) => {

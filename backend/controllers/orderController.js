@@ -1,7 +1,6 @@
 const Order = require('../models/Order');
 const Item = require('../models/Item');
 
-
 exports.createOrder = async (req, res) => {
   try {
     const { items, status } = req.body;
@@ -45,7 +44,6 @@ exports.createOrder = async (req, res) => {
   }
 };
 
-
 exports.getOrders = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -65,7 +63,6 @@ exports.getOrders = async (req, res) => {
   }
 };
 
-
 exports.getOrderById = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -77,7 +74,6 @@ exports.getOrderById = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
-
 
 exports.updateOrder = async (req, res) => {
   try {
@@ -99,7 +95,6 @@ exports.updateOrder = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
-
 
 exports.deleteOrder = async (req, res) => {
   try {

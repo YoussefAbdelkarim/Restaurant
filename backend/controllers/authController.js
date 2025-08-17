@@ -17,7 +17,7 @@ const createUser = async (req, res) => {
   try {
     const userExists = await User.findOne({ phoneNumber });
     if (userExists) {
-      return res.status(400).json({ message: 'User with this phone number already exists' });
+      return res.status(400).json({ message: 'Employee with this name already exists' });
     }
 
     const user = await User.create({
@@ -35,9 +35,10 @@ const createUser = async (req, res) => {
         phoneNumber: user.phoneNumber,
         role: user.role,
         token: generateToken(user._id),
+        status:user.status,
       });
     } else {
-      res.status(400).json({ message: 'Invalid user data' });
+      res.status(400).json({ message: 'Invalid Employee\'s data.' });
     }
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -49,7 +50,7 @@ const loginUser = async (req, res) => {
   const { phoneNumber, password } = req.body;
 
   if (!phoneNumber || !password) {
-    return res.status(400).json({ message: 'Please enter all required fields' });
+    return res.status(400).json({ message: 'Please enter all required fields.' });
   }
 
   try {
@@ -64,14 +65,76 @@ const loginUser = async (req, res) => {
         token: generateToken(user._id),
       });
     } else {
-      res.status(401).json({ message: 'Invalid phone number or password' });
+      res.status(401).json({ message: 'Invalid phone number or password.' });
     }
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
+const getUsers = async (req, res) => {
+  try {
+    const users = await User.find(); 
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+const getUserById = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'Employee not found.' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+const getUsersByStatus = async (req, res) => {
+  const { active } = req.query; // b3ato ya amma  ?active=true aw ?active=false bl api
+  if (active === undefined) {
+    return res.status(400).json({ message: 'Active status query is required' });
+  }
+
+  const isActive = active === 'true'; 
+  const users = await User.find({ active: isActive }).select('-password');
+  res.json(users);
+};
+
+const updateUser = async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true
+    });
+    if (!user|| !user.active) return res.status(404).json({ message: 'Employee not found or the Employee is not active any more.' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+const deleteUser = async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { active: false },
+      { new: true }
+    );
+    if (!user) return res.status(404).json({ message: 'employee not found.' });
+    res.json({ message: 'Employee deactivated.', user });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 module.exports = {
   createUser,
   loginUser,
+  getUsers,
+  getUserById,
+  getUsersByStatus,
+  updateUser,
+  deleteUser,
 };
