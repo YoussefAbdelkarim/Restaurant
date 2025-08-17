@@ -5,6 +5,8 @@ import { motion } from 'framer-motion';
 import AboutChef1Img from '../../utils/images/about-chef1-img.jpg';
 import ImageGallery from '../../components/ImageGallery/ImageGallery';
 import Reviews from '../../components/Reviews/Reviews';
+import '../../components/button.css';
+
 
 function About() {
   return (
@@ -31,7 +33,7 @@ function About() {
             <p>Welcome to Korlake Restaurant in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
             <p>Our restaurant is situated at 2 minutes walk from Azmi traffic light . The  facny lunch waiting you with your family or friends. We can't wait to serve you our delicious dishes!</p>
             <Link to='/contact'>
-              <button type='button' className='btn btn-success btn-lg rounded-0 text-capitalize mt-3 shadow'>Contact us</button>
+              <button type='button' className='custom-btn'>Contact us</button>
             </Link>
           </motion.div>
           <motion.div 

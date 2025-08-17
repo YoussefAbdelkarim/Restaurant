@@ -13,6 +13,7 @@ import drink from '../../utils/drink';
 import Pizza from '../../utils/images/pizza.jpg';
 import Fries from '../../utils/images/Fries.jpg';
 import Burger from '../../utils/images/burgers.jpg';
+import '../../components/button.css';
 
 function Menu() {
   return (
@@ -232,7 +233,7 @@ function Menu() {
         transition={{ duration: 1 }}
       >
         <Link to='/contact'>
-          <button type='button' className='btn btn-danger rounded-0 text-capitalize mx-2 shadow'>Book your table</button>
+          <button type='button' className='custom-btn'>Book your table</button>
         </Link>
       </motion.div>
     </div>

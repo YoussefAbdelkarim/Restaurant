@@ -3,6 +3,7 @@ import './AboutUsSection.css';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import AboutSectionImg from '../../utils/images/about-section-img.jpg';
+import '../button.css'; 
 
 function AboutUsSection() {
   return (
@@ -26,7 +27,8 @@ function AboutUsSection() {
                 <p>Welcome to Korlake Restaurant in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
                 <p className='mb-4 mb-lg-5'>Our restaurant is situated at 5 minutes walk from train station and shopping center. The location is ideal for a perfect breakfast, a facny lunch or a nice dinner with your family or friends. We can't wait to serve you our delicious dishes!</p>
                 <Link to='/about'>
-                    <button type='button' className='btn btn-dark btn-lg rounded-0 text-capitalize shadow'>More about us</button>
+                    <button type='button' className='custom-btn'
+                    >More about us</button>
                 </Link>
             </motion.div>
         </div>

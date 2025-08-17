@@ -1,0 +1,124 @@
+
+/* Container & Title */
+.manage-menu-container {
+  max-width: 1000px;
+  margin: 30px auto;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  padding: 20px;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0px 8px 24px rgba(0, 0, 0, 0.05);
+}
+
+.manage-menu-title {
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: #222;
+  margin: 0;
+}
+
+/* Top bar */
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 40px;
+  border-bottom: 2px solid #f1f1f1;
+  padding-bottom: 20px;
+}
+
+/* Add Employee Button */
+.add-item-btn {
+  background: #ffc300 !important;
+  color: rgb(0, 0, 0);
+  border: none;
+  padding: 6px 16px !important;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 50px;
+  cursor: pointer;
+  box-shadow: 0px 4px 12px rgba(255, 107, 107, 0.4);
+  transition: all 0.3s ease;      
+  min-width: 100px; 
+  max-width: fit-content;
+}
+.add-item-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0px 6px 16px rgba(255, 71, 87, 0.5);
+}
+
+/* Table styling */
+.employees-table {
+  width: 100%;
+  border-collapse: collapse;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.1);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 1rem;
+}
+
+.employees-table thead tr {
+  background-color: #f2f2f2;
+}
+
+.employees-table th, 
+.employees-table td {
+  padding: 14px 18px;
+  text-align: left;
+  border-bottom: 1px solid #e8e8e8;
+  font-weight: 600;
+  color: #444;
+}
+
+/* Zebra striping for rows */
+.employees-table tbody tr:nth-child(even) {
+  background-color: #fafafa;
+}
+
+/* Hover effect for rows */
+.employees-table tbody tr:hover {
+  background-color: #f5f5f5;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+  transition: all 0.25s ease;
+}
+
+/* Action buttons container */
+.dish-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+/* Edit button (green) */
+.edit {
+  background-color: #4caf50;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease, transform 0.2s ease;
+}
+
+.edit:hover {
+  background-color: #43a047;
+  transform: scale(1.05);
+}
+
+/* Delete button (red) */
+.delete {
+  background-color: #e74c3c;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease, transform 0.2s ease;
+}
+
+.delete:hover {
+  background-color: #c0392b;
+  transform: scale(1.05);
+}
