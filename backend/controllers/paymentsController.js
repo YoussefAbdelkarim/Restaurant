@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 
 const createPayment = async (req, res) => {
   try {
-    const { type, userId, itemName, quantity, unitPrice, amount, notes } = req.body;
+    const { type, userId, itemName, quantity, unitPrice, amount, notes, ingredients } = req.body;
 
     if (type === 'salary') {
       const employee = await User.findById(userId);
@@ -55,6 +55,98 @@ const createPayment = async (req, res) => {
     }
 
     if (type === 'purchase') {
+      // New multi-ingredient purchase flow
+      if (Array.isArray(ingredients) && ingredients.length > 0) {
+        // Validate and enrich ingredients
+        const enriched = [];
+        let totalAmount = 0;
+        const Ingredient = require('../models/Ingredient');
+        const OldIngredient = require('../models/OldIngredient');
+        const snapshots = [];
+        for (const line of ingredients) {
+          const { ingredientId, quantity: lineQty, unitPrice: linePrice } = line || {};
+          if (!ingredientId || !lineQty || !linePrice) {
+            return res.status(400).json({ message: 'Each ingredient must include ingredientId, quantity and unitPrice' });
+          }
+
+          const ingDoc = await Ingredient.findById(ingredientId);
+          if (!ingDoc) {
+            return res.status(404).json({ message: `Ingredient not found: ${ingredientId}` });
+          }
+
+          const lineAmount = Number(lineQty) * Number(linePrice);
+          const oldUnitPrice = Number(ingDoc.pricePerUnit || 0);
+          totalAmount += lineAmount;
+          enriched.push({
+            ingredient: ingDoc._id,
+            name: ingDoc.name,
+            unit: ingDoc.unit,
+            quantity: Number(lineQty),
+            unitPrice: Number(linePrice),
+            amount: lineAmount
+          });
+
+          // Prepare snapshot payload only if ingredient had a non-zero existing unit price
+          if (oldUnitPrice > 0) {
+            snapshots.push({
+              originalIngredient: ingDoc._id,
+              name: ingDoc.name,
+              unit: ingDoc.unit,
+              currentStock: ingDoc.currentStock,
+              alertThreshold: ingDoc.alertThreshold,
+              purchasedQuantity: Number(lineQty),
+              purchasedUnitPrice: oldUnitPrice,
+              amount: Number(lineQty) * oldUnitPrice,
+            });
+          }
+        }
+
+        // Insert snapshots first to guarantee they capture the old state
+        let insertedSnapshots = [];
+        if (snapshots.length) {
+          insertedSnapshots = await OldIngredient.insertMany(snapshots, { ordered: true });
+        }
+
+        // Create payment document
+        const payment = await Payment.create({
+          type,
+          ingredients: enriched,
+          amount: totalAmount,
+          notes,
+          user: userId || null
+        });
+
+        // Update stocks for each ingredient (add quantities) and update analytics
+        for (const line of enriched) {
+          await Ingredient.findByIdAndUpdate(
+            line.ingredient,
+            {
+              $inc: {
+                currentStock: line.quantity,
+                totalPurchasedQuantity: line.quantity,
+                totalPurchasedAmount: line.amount,
+              },
+              $set: {
+                lastPurchaseUnitPrice: line.unitPrice,
+                pricePerUnit: line.unitPrice,
+              }
+            },
+            { new: true }
+          );
+        }
+
+        // Attach payment id to the snapshots we just inserted
+        if (insertedSnapshots.length) {
+          await OldIngredient.updateMany(
+            { _id: { $in: insertedSnapshots.map(doc => doc._id) } },
+            { $set: { payment: payment._id } }
+          );
+        }
+
+        return res.status(201).json(payment);
+      }
+
+      // Legacy single-item purchase flow (backward compatibility)
       const totalAmount = quantity * unitPrice;
 
       const payment = await Payment.create({
@@ -106,9 +198,20 @@ const getPayments = async (req, res) => {
         if (payment.type === 'salary') {
           formatted.employeeName = payment.user?.name || 'Unknown Employee';
         } else if (payment.type === 'purchase') {
-          formatted.itemName = payment.itemName;
-          formatted.quantity = payment.quantity;
-          formatted.unitPrice = payment.unitPrice;
+          if (payment.ingredients && payment.ingredients.length) {
+            formatted.ingredients = payment.ingredients.map(i => ({
+              name: i.name,
+              unit: i.unit,
+              quantity: i.quantity,
+              unitPrice: i.unitPrice,
+              amount: i.amount
+            }));
+          } else {
+            // legacy
+            formatted.itemName = payment.itemName;
+            formatted.quantity = payment.quantity;
+            formatted.unitPrice = payment.unitPrice;
+          }
         }
 
         return formatted;
@@ -155,7 +258,7 @@ const getPayments = async (req, res) => {
       }
 
       const purchases = await Payment.find(filter)
-        .select('itemName quantity unitPrice amount date notes')
+        .select('itemName quantity unitPrice ingredients amount date notes')
         .sort({ date: -1 });
 
       const total = purchases.reduce((sum, p) => sum + (p.amount || 0), 0);

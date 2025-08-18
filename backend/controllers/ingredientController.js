@@ -1,7 +1,7 @@
 const Ingredient = require('../models/Ingredient');
 
 const createIngredient = async (req, res) => {
-  const { name, unit, currentStock, alertThreshold } = req.body;
+  const { name, unit, currentStock, alertThreshold, pricePerUnit } = req.body;
 
   if (!name || !unit) {
     return res.status(400).json({ message: 'Name and unit are required' });
@@ -12,7 +12,8 @@ const createIngredient = async (req, res) => {
       name, 
       unit, 
       currentStock: currentStock || 0, 
-      alertThreshold: alertThreshold || 0 
+      alertThreshold: alertThreshold || 0,
+      pricePerUnit: pricePerUnit || 0,
     });
     res.status(201).json(ingredient);
   } catch (err) {

@@ -18,6 +18,23 @@ const ingredientSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    pricePerUnit: {
+      type: Number,
+      default: 0,
+    },
+    // Cumulative purchase tracking for analytics
+    totalPurchasedQuantity: {
+      type: Number,
+      default: 0,
+    },
+    totalPurchasedAmount: {
+      type: Number,
+      default: 0,
+    },
+    lastPurchaseUnitPrice: {
+      type: Number,
+      default: 0,
+    },
     alertThreshold: {
       type: Number,
       default: 0,
