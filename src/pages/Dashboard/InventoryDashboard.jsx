@@ -20,7 +20,8 @@ export default function InventoryDashboard() {
     name: '',
     currentStock: 0,
     unit: '',
-    alertThreshold: 5
+    alertThreshold: 5,
+    pricePerUnit: 0,
   });
   
   const [newItem, setNewItem] = useState({
@@ -758,6 +759,17 @@ export default function InventoryDashboard() {
                 <option value="l">Liters (l)</option>
                 <option value="piece">Piece</option>
               </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Price per Unit</Form.Label>
+              <Form.Control
+                type="number"
+                min="0"
+                step="0.01"
+                value={newIngredient.pricePerUnit}
+                onChange={(e) => setNewIngredient({...newIngredient, pricePerUnit: parseFloat(e.target.value)})}
+                required
+              />
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Alert Threshold</Form.Label>

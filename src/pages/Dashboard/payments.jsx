@@ -79,45 +79,6 @@ export default function Payments() {
     }
   };
 
-  // Mark payment as paid function
-  const handleMarkAsPaid = async (paymentId) => {
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        alert('Authentication required. Please login again.');
-        return;
-      }
-
-      const response = await fetch(`/api/payments/${paymentId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ status: 'paid' })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to update payment status: ${response.status}`);
-      }
-
-      const updatedPayment = await response.json();
-      
-      // Update the payment in local state
-      setPayments(prevPayments => 
-        prevPayments.map(payment => 
-          payment._id === paymentId ? updatedPayment : payment
-        )
-      );
-      
-      alert('Payment marked as paid successfully!');
-    } catch (error) {
-      console.error('Error updating payment status:', error);
-      alert(`Error updating payment status: ${error.message}`);
-    }
-  };
-
   // Filtered payments
   const filteredPayments = payments.filter((p) => {
     if (typeFilter !== "All" && p.type !== typeFilter.toLowerCase()) return false;
@@ -127,7 +88,14 @@ export default function Payments() {
     }
     if (searchClicked && searchName) {
       if (p.type === "salary" && !p.employeeName?.toLowerCase().includes(searchName.toLowerCase())) return false;
-      if (p.type === "purchase" && !p.itemName?.toLowerCase().includes(searchName.toLowerCase())) return false;
+      if (p.type === "purchase") {
+        if (p.ingredients && p.ingredients.length) {
+          const joined = p.ingredients.map(i => (i.name || '')).join(' ').toLowerCase();
+          if (!joined.includes(searchName.toLowerCase())) return false;
+        } else if (!p.itemName?.toLowerCase().includes(searchName.toLowerCase())) {
+          return false;
+        }
+      }
     }
     return true;
   });
@@ -220,7 +188,6 @@ export default function Payments() {
             <th>Details</th>
             <th>Amount</th>
             <th>Date</th>
-            <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -235,54 +202,47 @@ export default function Payments() {
                     <>Employee: <strong>{p.employeeName || 'Unknown'}</strong></>
                   ) : (
                     <>
-                      Item: <strong>{p.itemName || 'Unknown'}</strong> <br />
-                      Qty: {p.quantity || 0}, Unit Price: ${p.unitPrice || 0} <br />
-                      Notes: {p.notes || 'N/A'}
+                      {p.ingredients && p.ingredients.length ? (
+                        <div>
+                          {p.ingredients.map((i, idx) => (
+                            <div key={idx}>
+                              <strong>{i.name}</strong> ({i.unit}) - Qty: {i.quantity}, Unit Price: ${i.unitPrice}{i.amount ? `, Amount: $${i.amount}` : ''}
+                            </div>
+                          ))}
+                          <div>Notes: {p.notes || 'N/A'}</div>
+                        </div>
+                      ) : (
+                        <>
+                          Item: <strong>{p.itemName || 'Unknown'}</strong> <br />
+                          Qty: {p.quantity || 0}, Unit Price: ${p.unitPrice || 0} <br />
+                          Notes: {p.notes || 'N/A'}
+                        </>
+                      )}
                     </>
                   )}
                 </td>
-                                 <td>${p.amount}</td>
-                 <td>{new Date(p.date).toLocaleDateString()}</td>
-                 <td>
-                   <Badge 
-                     bg={p.status === 'paid' ? 'success' : 'warning'}
-                     className="text-capitalize"
-                   >
-                     {p.status || 'pending'}
-                   </Badge>
-                 </td>
-                 <td>
-                   <div className="d-flex gap-2">
-                     {p.status !== 'paid' && (
-                       <Button
-                         size="sm"
-                         variant="success"
-                         onClick={() => handleMarkAsPaid(p._id)}
-                         className="d-flex align-items-center gap-1"
-                         title="Mark as Paid"
-                       >
-                         <i className="fas fa-check"></i>
-                         <span className="d-none d-sm-inline">PAID</span>
-                       </Button>
-                     )}
-                     <Button
-                       size="sm"
-                       variant="danger"
-                       onClick={() => handleDeletePayment(p._id)}
-                       className="d-flex align-items-center gap-1"
-                       title="Delete Payment"
-                     >
-                       <i className="fas fa-trash"></i>
-                       <span className="d-none d-sm-inline">Delete</span>
-                     </Button>
-                   </div>
-                 </td>
-               </tr>
+                <td>${p.amount}</td>
+                <td>{new Date(p.date).toLocaleDateString()}</td>
+                <td>
+                  <div className="d-flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() => handleDeletePayment(p._id)}
+                      className="d-flex align-items-center gap-1"
+                      title="Delete Payment"
+                    >
+                      <i className="fas fa-trash"></i>
+                      <span className="d-none d-sm-inline">Delete</span>
+                    </Button>
+                  </div>
+                </td>
+              </tr>
             ))
           ) : (
-                         <tr>
-               <td colSpan="7" className="text-center text-muted">No payments found</td>
-             </tr>
+            <tr>
+              <td colSpan="6" className="text-center text-muted">No payments found</td>
+            </tr>
           )}
         </tbody>
       </Table>

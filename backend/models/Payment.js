@@ -13,26 +13,54 @@ const paymentSchema = new mongoose.Schema({
       return this.type === 'salary';
     }
   },
+  // Legacy single-item purchase fields (kept for backward compatibility)
   itemName: {
-    type: String,
-    required: function() {
-      return this.type === 'purchase';
-    }
+    type: String
   },
   quantity: {
     type: Number,
-    min: 1,
-    required: function() {
-      return this.type === 'purchase';
-    }
+    min: 1
   },
   unitPrice: {
     type: Number,
-    min: 0,
-    required: function() {
-      return this.type === 'purchase';
-    }
+    min: 0
   },
+  // New multi-ingredient purchase details
+  ingredients: [
+    {
+      ingredient: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Ingredient',
+        required: function() {
+          return this.parent()?.type === 'purchase';
+        }
+      },
+      name: {
+        type: String
+      },
+      unit: {
+        type: String
+      },
+      quantity: {
+        type: Number,
+        min: 1,
+        required: function() {
+          return this.parent()?.type === 'purchase';
+        }
+      },
+      unitPrice: {
+        type: Number,
+        min: 0,
+        required: function() {
+          return this.parent()?.type === 'purchase';
+        }
+      },
+      amount: {
+        type: Number,
+        min: 0
+      }
+    }
+  ],
   amount: {
     type: Number,
     min: 0,
