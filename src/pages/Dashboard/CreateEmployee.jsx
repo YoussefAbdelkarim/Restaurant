@@ -11,7 +11,7 @@ const CreateEmployee = () => {
     phoneNumber: '',
     password: '',
     role: '',
-    salary: '' // added salary field
+    salary: '' // monthly salary
   });
 
   const handleChange = (e) => {
@@ -21,7 +21,22 @@ const CreateEmployee = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await axios.post('/api/auth/create', formData);
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Authentication required. Please login again.');
+        navigate('/login');
+        return;
+      }
+
+      const payload = {
+        ...formData,
+        monthlySalary: formData.salary ? Number(formData.salary) : 0,
+      };
+      const res = await axios.post('/api/auth/create', payload, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
       if (res.status === 201 || res.status === 200) {
         alert('User created successfully!');
         setFormData({
@@ -94,13 +109,20 @@ const CreateEmployee = () => {
 
         <label>
           Role:
-          <input 
-            type="text" 
-            name="role" 
-            placeholder="Role" 
-            value={formData.role} 
-            onChange={handleChange} 
-          />
+          <select
+            name="role"
+            value={formData.role}
+            onChange={handleChange}
+            required
+          >
+            <option value="">Select role</option>
+            <option value="co-manager">co-manager</option>
+            <option value="cashier">cashier</option>
+            <option value="waiter">waiter</option>
+            <option value="cleaner">cleaner</option>
+            <option value="manager">manager</option>
+            <option value="accountant">accountant</option>
+          </select>
         </label>
 
         <label>

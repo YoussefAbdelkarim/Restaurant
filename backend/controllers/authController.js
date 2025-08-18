@@ -8,16 +8,25 @@ const generateToken = (userId) => {
 };
 
 const createUser = async (req, res) => {
-  const { name, DOB, phoneNumber, password, role } = req.body;
+  const { name, DOB, phoneNumber, password } = req.body;
+  // accept either monthlySalary or salary from client
+  const monthlySalary = Number(req.body.monthlySalary ?? req.body.salary ?? 0) || 0;
+  let role = req.body.role;
 
   if (!name || !phoneNumber || !password) {
     return res.status(400).json({ message: 'Please enter all required fields' });
   }
 
+  // validate role to allowed set or default to 'cashier'
+  const allowedRoles = ['admin', 'accountant', 'cashier', 'manager', 'co-manager', 'waiter', 'cleaner'];
+  if (!role || !allowedRoles.includes(role)) {
+    role = 'cashier';
+  }
+
   try {
     const userExists = await User.findOne({ phoneNumber });
     if (userExists) {
-      return res.status(400).json({ message: 'Employee with this name already exists' });
+      return res.status(400).json({ message: 'Employee with this phone number already exists' });
     }
 
     const user = await User.create({
@@ -26,22 +35,30 @@ const createUser = async (req, res) => {
       phoneNumber,
       password,
       role,
+      monthlySalary,
     });
 
     if (user) {
-      res.status(201).json({
+      return res.status(201).json({
         _id: user._id,
         name: user.name,
         phoneNumber: user.phoneNumber,
         role: user.role,
         token: generateToken(user._id),
-        status:user.status,
+        status: user.status,
       });
-    } else {
-      res.status(400).json({ message: 'Invalid Employee\'s data.' });
     }
+
+    return res.status(400).json({ message: 'Invalid employee data.' });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors || {}).map(e => e.message);
+      return res.status(400).json({ message: messages.join(', ') || 'Validation error' });
+    }
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'Duplicate field value (phone number must be unique).' });
+    }
+    return res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
