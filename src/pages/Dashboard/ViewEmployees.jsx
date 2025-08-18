@@ -22,9 +22,16 @@ const ViewEmployees = () => {
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
-        const response = await axios.get('/api/auth'); 
-         console.log(response.data); 
-        setEmployees(response.data);
+        const token = localStorage.getItem('token');
+        if (!token) {
+          console.error('Authentication required. Please login again.');
+          navigate('/login');
+          return;
+        }
+        const response = await axios.get('/api/auth', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setEmployees(response.data || []);
       } catch (error) {
         console.error('Error fetching employees:', error);
       }
@@ -48,7 +55,10 @@ const ViewEmployees = () => {
   const handleEditItemSubmit = async (e) => {
     e.preventDefault();
     try {
-      await axios.put(`/api/auth/${editFormData._id}`, editFormData);
+      const token = localStorage.getItem('token');
+      await axios.put(`/api/auth/${editFormData._id}`, editFormData, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       setEmployees(prev => prev.map(emp => (emp._id === editFormData._id ? editFormData : emp)));
       setShowEditForm(false);
     } catch (error) {
@@ -60,7 +70,10 @@ const ViewEmployees = () => {
   const handleDelete = async (_id) => {
     if (window.confirm('Are you sure you want to delete this employee?')) {
       try {
-        await axios.delete(`/api/auth/${_id}`);
+        const token = localStorage.getItem('token');
+        await axios.delete(`/api/auth/${_id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
         setEmployees(employees.filter(emp => emp._id !== _id));
       } catch (error) {
         console.error('Error deleting employee:', error);
@@ -86,7 +99,6 @@ const ViewEmployees = () => {
             <th>Name</th>
             <th>DOB</th>
             <th>Phone Number</th>
-            <th>Password</th>
             <th>Role</th>
             <th>Salary</th>
             <th>Actions</th>
@@ -96,11 +108,10 @@ const ViewEmployees = () => {
           {employees.length > 0 ? employees.map(employee => (
             <tr key={employee._id}>
               <td>{employee.name}</td>
-              <td>{employee.DOB}</td>
+              <td>{employee.DOB ? new Date(employee.DOB).toLocaleDateString() : ''}</td>
               <td>{employee.phoneNumber}</td>
-              <td>{employee.password}</td>
               <td>{employee.role}</td>
-              <td>{employee.salary}</td>
+              <td>{employee.monthlySalary ?? ''}</td>
               <td className="dish-buttons">
                 <button onClick={() => handleEdit(employee)} className="edit">Edit</button>
                 <button onClick={() => handleDelete(employee._id)} className="delete">Delete</button>

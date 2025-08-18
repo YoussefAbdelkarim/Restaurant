@@ -72,16 +72,8 @@ const loginUser = async (req, res) => {
   try {
     const user = await User.findOne({ phoneNumber });
 
-    if (user && (await user.matchPassword(password))) {
-      res.json({
-        _id: user._id,
-        name: user.name,
-        phoneNumber: user.phoneNumber,
-        role: user.role,
-        token: generateToken(user._id),
-      });
-    } else {
-      res.status(401).json({ message: 'Invalid phone number or password.' });
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid phone number or password.' });
     }
 
     if (!user.active) {
@@ -89,12 +81,11 @@ const loginUser = async (req, res) => {
     }
 
     const isMatch = await user.matchPassword(password);
-
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid phone number or password.' });
     }
 
-    res.json({
+    return res.json({
       _id: user._id,
       name: user.name,
       phoneNumber: user.phoneNumber,

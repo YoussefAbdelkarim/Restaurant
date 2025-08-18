@@ -4,8 +4,8 @@ const { createPayment, getPayments, deletePayment, updatePaymentStatus } = requi
 const { protect} = require('../middleWares/authMiddleware');
 const allowRoles = require('../middleWares/roleMiddleware');
 
-router.get('/', protect, allowRoles('admin'), getPayments);
-router.post('/', protect, allowRoles('admin'), createPayment);
+router.get('/', protect, allowRoles('admin', 'manager', 'accountant'), getPayments);
+router.post('/', protect, allowRoles('admin', 'accountant'), createPayment);
 router.delete('/:id', protect, allowRoles('admin'), deletePayment);
-router.patch('/:id/status', protect, allowRoles('admin'), updatePaymentStatus);
+router.patch('/:id/status', protect, allowRoles('admin', 'accountant'), updatePaymentStatus);
 module.exports = router;
