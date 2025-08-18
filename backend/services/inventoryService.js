@@ -2,6 +2,33 @@ const Item = require('../models/Item');
 const Ingredient = require('../models/Ingredient');
 
 class InventoryService {
+  // Convert requirement units to ingredient's unit; also normalize legacy units
+  static convertToIngredientUnit(requirementUnit, ingredientUnit, quantity) {
+    const norm = (u) => {
+      const m = String(u || '').toLowerCase();
+      if (m === 'grams' || m === 'g') return { u: 'g', factor: 1 };
+      if (m === 'kg' || m === 'kilograms') return { u: 'kg', factor: 1 };
+      if (m === 'ml' || m === 'milliliters') return { u: 'l', factor: 1/1000 };
+      if (m === 'l' || m === 'liters') return { u: 'l', factor: 1 };
+      if (m === 'pieces' || m === 'piece') return { u: 'piece', factor: 1 };
+      if (m === 'unit' || m === 'units') return { u: 'unit', factor: 1 };
+      return { u: m, factor: 1 };
+    };
+    const req = norm(requirementUnit);
+    const ing = norm(ingredientUnit);
+    // Convert requirement to canonical base where possible
+    let qtyInCanonical = quantity * req.factor;
+    // Now convert canonical to ingredient unit
+    if (req.u === 'g' && ing.u === 'kg') return qtyInCanonical / 1000;
+    if (req.u === 'kg' && ing.u === 'g') return qtyInCanonical * 1000;
+    if (req.u === 'l' && ing.u === 'l') return qtyInCanonical;
+    if (req.u === 'g' && ing.u === 'g') return qtyInCanonical;
+    if (req.u === 'kg' && ing.u === 'kg') return qtyInCanonical;
+    if (req.u === 'piece' && ing.u === 'piece') return qtyInCanonical;
+    if (req.u === 'unit' && ing.u === 'unit') return qtyInCanonical;
+    // If units differ but not convertible with our set, assume the requirement is already in ingredient units
+    return quantity;
+  }
   /**
    * Process an order and deduct ingredients from inventory
    * @param {Array} orderItems - Array of order items with name, quantity, etc.
@@ -26,34 +53,18 @@ class InventoryService {
         });
 
         if (item) {
-          // Item exists in items table, check if we have enough stock
-          if (item.currentStock >= quantity) {
-            // Deduct from item stock
-            item.currentStock -= quantity;
-            await item.save();
-            
+          // Prefer deducting from ingredients via recipe to record usage properly
+          const preparationResult = await this.prepareFromIngredients(item.name, quantity);
+          if (preparationResult.success) {
             results.processedItems.push({
               name: itemName,
-              type: 'item',
+              type: 'prepared',
               quantity: quantity,
-              stockReduced: true,
-              previousStock: item.currentStock + quantity,
-              newStock: item.currentStock
+              ingredientsUsed: preparationResult.ingredientsUsed
             });
           } else {
-            // Not enough stock, try to prepare from ingredients
-            const preparationResult = await this.prepareFromIngredients(itemName, quantity);
-            if (preparationResult.success) {
-              results.processedItems.push({
-                name: itemName,
-                type: 'prepared',
-                quantity: quantity,
-                ingredientsUsed: preparationResult.ingredientsUsed
-              });
-            } else {
-              results.errors.push(`Cannot prepare ${quantity}x ${itemName}: ${preparationResult.error}`);
-              results.success = false;
-            }
+            results.errors.push(`Cannot prepare ${quantity}x ${itemName}: ${preparationResult.error}`);
+            results.success = false;
           }
         } else {
           // Item doesn't exist, try to prepare from ingredients using predefined ingredient requirements
@@ -87,8 +98,21 @@ class InventoryService {
    */
   static async prepareFromIngredients(itemName, quantity) {
     try {
-      // Define ingredient requirements for common dishes
-      const dishRequirements = this.getDishIngredientRequirements(itemName);
+      // Try to read recipe from Items collection first
+      const itemDoc = await Item.findOne({ name: { $regex: new RegExp(itemName, 'i') } });
+      let dishRequirements = null;
+      if (itemDoc && Array.isArray(itemDoc.ingredients) && itemDoc.ingredients.length) {
+        dishRequirements = itemDoc.ingredients.map(r => ({
+          name: r.name || undefined,
+          ingredientId: r.ingredient,
+          quantity: r.quantity,
+          unit: r.unit,
+        }));
+      }
+      if (!dishRequirements) {
+        // Fallback to predefined mapping
+        dishRequirements = this.getDishIngredientRequirements(itemName);
+      }
       
       if (!dishRequirements) {
         return {
@@ -139,6 +163,12 @@ class InventoryService {
     
     // Define ingredient requirements for common dishes based on available inventory
     const requirements = {
+      'french fries': [
+        { name: 'Potatoes', quantity: 2, unit: 'piece' }
+      ],
+      'fries': [
+        { name: 'Potatoes', quantity: 2, unit: 'piece' }
+      ],
       'cheeseburger': [
         { name: 'Beef Patty', quantity: 1, unit: 'kg' },
         { name: 'Cheese', quantity: 100, unit: 'g' },
@@ -199,18 +229,25 @@ class InventoryService {
     const missingIngredients = [];
 
     for (const requirement of dishRequirements) {
-      const ingredient = await Ingredient.findOne({ 
-        name: { $regex: new RegExp(requirement.name, 'i') } 
-      });
+      let ingredient = null;
+      if (requirement.ingredientId) {
+        ingredient = await Ingredient.findById(requirement.ingredientId);
+      }
+      if (!ingredient && requirement.name) {
+        ingredient = await Ingredient.findOne({ 
+          name: { $regex: new RegExp(requirement.name, 'i') } 
+        });
+      }
       
       if (!ingredient) {
         missingIngredients.push(`${requirement.name} (not found in inventory)`);
         continue;
       }
 
-      const requiredQuantity = requirement.quantity * quantity;
+      const requiredQuantityRaw = requirement.quantity * quantity;
+      const requiredQuantity = this.convertToIngredientUnit(requirement.unit, ingredient.unit, requiredQuantityRaw);
       if (ingredient.currentStock < requiredQuantity) {
-        missingIngredients.push(`${requirement.name} (need ${requiredQuantity} ${requirement.unit}, have ${ingredient.currentStock} ${ingredient.unit})`);
+        missingIngredients.push(`${requirement.name} (need ${requiredQuantity} ${ingredient.unit}, have ${ingredient.currentStock} ${ingredient.unit})`);
       }
     }
 
@@ -231,9 +268,15 @@ class InventoryService {
 
     try {
       for (const requirement of dishRequirements) {
-        const ingredient = await Ingredient.findOne({ 
-          name: { $regex: new RegExp(requirement.name, 'i') } 
-        });
+        let ingredient = null;
+        if (requirement.ingredientId) {
+          ingredient = await Ingredient.findById(requirement.ingredientId);
+        }
+        if (!ingredient && requirement.name) {
+          ingredient = await Ingredient.findOne({ 
+            name: { $regex: new RegExp(requirement.name, 'i') } 
+          });
+        }
         
         if (!ingredient) {
           return {
@@ -242,7 +285,7 @@ class InventoryService {
           };
         }
 
-        const requiredQuantity = requirement.quantity * quantity;
+        const requiredQuantity = this.convertToIngredientUnit(requirement.unit, ingredient.unit, requirement.quantity * quantity);
         
         if (ingredient.currentStock < requiredQuantity) {
           return {
@@ -251,9 +294,24 @@ class InventoryService {
           };
         }
 
-        // Deduct the ingredient
+        // Deduct the ingredient and log usage transaction
         ingredient.currentStock -= requiredQuantity;
         await ingredient.save();
+        try {
+          const InventoryTransaction = require('../models/InventoryTransaction');
+          await InventoryTransaction.create({
+            ingredient: ingredient._id,
+            quantity: requiredQuantity,
+            operation: 'subtract',
+            kind: 'usage',
+            unitPrice: Number(ingredient.pricePerUnit || 0),
+            amount: Number(ingredient.pricePerUnit || 0) * requiredQuantity,
+            date: new Date(),
+            notes: `Used for preparing ${quantity}x ${dishName}`,
+          });
+        } catch (e) {
+          // non-fatal
+        }
 
         ingredientsUsed.push({
           name: ingredient.name,

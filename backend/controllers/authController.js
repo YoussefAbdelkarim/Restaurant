@@ -143,13 +143,10 @@ const updateUser = async (req, res) => {
 
 const deleteUser = async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { active: false },
-      { new: true }
-    );
-    if (!user) return res.status(404).json({ message: 'employee not found.' });
-    res.json({ message: 'Employee deactivated.', user });
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'Employee not found.' });
+    await user.deleteOne();
+    res.json({ message: 'Employee deleted.' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

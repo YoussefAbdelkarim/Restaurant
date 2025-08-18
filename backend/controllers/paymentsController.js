@@ -135,6 +135,27 @@ const createPayment = async (req, res) => {
           );
         }
 
+        // Log inventory transactions for purchases
+        try {
+          const InventoryTransaction = require('../models/InventoryTransaction');
+          const txDocs = enriched.map(line => ({
+            ingredient: line.ingredient,
+            quantity: line.quantity,
+            operation: 'add',
+            kind: 'purchase',
+            unitPrice: line.unitPrice,
+            amount: line.amount,
+            payment: payment._id,
+            date: new Date(),
+          }));
+          if (txDocs.length) {
+            await InventoryTransaction.insertMany(txDocs);
+          }
+        } catch (e) {
+          // non-fatal
+          console.error('Failed to log inventory transactions for purchase', e.message);
+        }
+
         // Attach payment id to the snapshots we just inserted
         if (insertedSnapshots.length) {
           await OldIngredient.updateMany(

@@ -1,21 +1,26 @@
 const mongoose = require('mongoose');
 
-const ingredientSchema = new mongoose.Schema({
+const recipeIngredientSchema = new mongoose.Schema({
+  ingredient: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Ingredient',
+    required: true,
+  },
   name: {
     type: String,
-    required: true,
     trim: true,
   },
   quantity: {
     type: Number,
     required: true,
+    min: 0,
   },
   unit: {
     type: String,
-    enum: ['grams', 'ml', 'pieces', 'kg', 'liters', 'unit'],
+    enum: ['g', 'kg', 'l', 'piece', 'unit'],
     required: true,
   },
-});
+}, { _id: false });
 
 const itemSchema = new mongoose.Schema(
   {
@@ -41,7 +46,7 @@ const itemSchema = new mongoose.Schema(
       enum: ['plate', 'sandwich', 'drink', 'burger', 'pizza', 'dessert', 'beverage', 'fries', 'spirits', 'pancakes', 'cake', 'juice'],
       required: true,
     },
-    ingredients: [ingredientSchema],
+    ingredients: [recipeIngredientSchema],
 
     imageUrl: {
       type: String,

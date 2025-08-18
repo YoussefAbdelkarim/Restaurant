@@ -168,61 +168,72 @@ const AddOrder = () => {
             </thead>
             <tbody>
               {form.items.map((orderItem, index) => (
-                <tr key={index}>
-                  <td>
-                                         <select
-                       value={orderItem.item}
-                       onChange={(e) =>
-                         handleChange(index, "item", e.target.value)
-                       }
-                       required
-                       disabled={loading}
-                     >
-                       <option value="">{loading ? 'Loading...' : 'Select Item'}</option>
-                                               {itemsList.map((menuItem) => (
+                <React.Fragment key={index}>
+                  <tr>
+                    <td>
+                      <select
+                        value={orderItem.item}
+                        onChange={(e) =>
+                          handleChange(index, "item", e.target.value)
+                        }
+                        required
+                        disabled={loading}
+                      >
+                        <option value="">{loading ? 'Loading...' : 'Select Item'}</option>
+                        {itemsList.map((menuItem) => (
                           <option key={menuItem._id} value={menuItem._id}>
-                            {menuItem.name} - ${menuItem.price} (Stock: {menuItem.currentStock})
+                            {menuItem.name} - ${menuItem.price}
                           </option>
                         ))}
-                     </select>
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      value={orderItem.quantity}
-                      min="1"
-                      onChange={(e) =>
-                        handleChange(index, "quantity", e.target.value)
-                      }
-                      required
-                    />
-                    {orderItem.item && (() => {
-                      const menuItem = itemsList.find(item => item._id === orderItem.item);
-                      if (menuItem && orderItem.quantity > menuItem.currentStock) {
-                        return (
-                          <div style={{ color: 'red', fontSize: '0.8rem', marginTop: '5px' }}>
-                            ⚠️ Insufficient stock! Only {menuItem.currentStock} available
-                          </div>
-                        );
-                      }
-                      return null;
-                    })()}
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-remove"
-                      onClick={() => handleRemoveItem(index)}
-                      style={{
-                        backgroundColor: "#ed3131ff",
-                        border: "none",
-                        cursor: "pointer"
-                      }}
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        value={orderItem.quantity}
+                        min="1"
+                        onChange={(e) =>
+                          handleChange(index, "quantity", e.target.value)
+                        }
+                        required
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-remove"
+                        onClick={() => handleRemoveItem(index)}
+                        style={{
+                          backgroundColor: "#ed3131ff",
+                          border: "none",
+                          cursor: "pointer"
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                  {orderItem.item && (() => {
+                    const menuItem = itemsList.find(item => item._id === orderItem.item);
+                    if (menuItem && Array.isArray(menuItem.ingredients) && menuItem.ingredients.length) {
+                      return (
+                        <tr>
+                          <td colSpan="3" style={{ background: '#fafafa' }}>
+                            <div style={{ fontSize: '0.9rem' }}>
+                              <strong>Ingredients required:</strong>
+                              <div style={{ marginTop: '6px' }}>
+                                {menuItem.ingredients.map((r, i) => (
+                                  <div key={i}>- {r.name}: {r.quantity * orderItem.quantity} {r.unit}</div>
+                                ))}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+                    return null;
+                  })()}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -237,7 +248,7 @@ const AddOrder = () => {
           + Add Item
         </button>
 
-        {/* Order Summary */}
+        {/* Order Summary + Recipe Costs */}
         {form.items.some(item => item.item) && (
           <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '5px' }}>
             <h6>Order Summary:</h6>
@@ -247,14 +258,21 @@ const AddOrder = () => {
             {(() => {
               const stockWarnings = [];
               let totalValue = 0;
+              const recipeLines = [];
               
               form.items.forEach(orderItem => {
                 if (orderItem.item) {
                   const menuItem = itemsList.find(item => item._id === orderItem.item);
                   if (menuItem) {
                     totalValue += menuItem.price * orderItem.quantity;
-                    if (orderItem.quantity > menuItem.currentStock) {
-                      stockWarnings.push(`${menuItem.name}: ${orderItem.quantity} requested, ${menuItem.currentStock} available`);
+                    // Build recipe details per item
+                    if (Array.isArray(menuItem.ingredients) && menuItem.ingredients.length) {
+                      const lines = menuItem.ingredients.map(r => {
+                        const name = r.name || (r.ingredient && `Ingredient ${r.ingredient}`) || 'ingredient';
+                        const qty = r.quantity * orderItem.quantity;
+                        return `- ${name}: ${qty} ${r.unit}`;
+                      });
+                      recipeLines.push({ name: menuItem.name, qty: orderItem.quantity, lines });
                     }
                   }
                 }
@@ -265,6 +283,21 @@ const AddOrder = () => {
                   <div style={{ marginBottom: '10px' }}>
                     <strong>Total Value:</strong> ${totalValue.toFixed(2)}
                   </div>
+                  {recipeLines.length > 0 && (
+                    <div style={{ marginTop: '10px' }}>
+                      <strong>Ingredient Costs (per order):</strong>
+                      <div style={{ marginTop: '6px' }}>
+                        {recipeLines.map((r, idx) => (
+                          <div key={idx} style={{ marginBottom: '6px' }}>
+                            {r.name} x{r.qty}
+                            <div style={{ marginLeft: '12px', fontSize: '0.9rem' }}>
+                              {r.lines.map((l, i) => (<div key={i}>{l}</div>))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {stockWarnings.length > 0 && (
                     <div style={{ color: 'red', fontSize: '0.9rem' }}>
                       <strong>Stock Warnings:</strong>

@@ -41,7 +41,14 @@ const ViewEmployees = () => {
 
   // Open edit form
   const handleEdit = (employee) => {
-    setEditFormData(employee);
+    setEditFormData({
+      _id: employee._id,
+      name: employee.name || '',
+      DOB: employee.DOB ? employee.DOB.split('T')[0] : '',
+      phoneNumber: employee.phoneNumber || '',
+      role: employee.role || '',
+      salary: employee.monthlySalary ?? ''
+    });
     setShowEditForm(true);
   };
 
@@ -56,10 +63,12 @@ const ViewEmployees = () => {
     e.preventDefault();
     try {
       const token = localStorage.getItem('token');
-      await axios.put(`/api/auth/${editFormData._id}`, editFormData, {
+      const payload = { ...editFormData };
+      delete payload.password; // do not send password here
+      const { data } = await axios.put(`/api/auth/${editFormData._id}`, payload, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setEmployees(prev => prev.map(emp => (emp._id === editFormData._id ? editFormData : emp)));
+      setEmployees(prev => prev.map(emp => (emp._id === editFormData._id ? data : emp)));
       setShowEditForm(false);
     } catch (error) {
       console.error('Error updating employee:', error);
@@ -74,7 +83,8 @@ const ViewEmployees = () => {
         await axios.delete(`/api/auth/${_id}`, {
           headers: { Authorization: `Bearer ${token}` }
         });
-        setEmployees(employees.filter(emp => emp._id !== _id));
+        // reflect deactivation (active=false) by either removing from list or updating flag
+        setEmployees(prev => prev.filter(emp => emp._id !== _id));
       } catch (error) {
         console.error('Error deleting employee:', error);
       }
@@ -178,26 +188,19 @@ const ViewEmployees = () => {
               />
             </label>
 
-            <label>
-              Password:
-              <input
-                type="text"
-                name="password"
-                value={editFormData.password}
-                onChange={handleEditInputChange}
-                required
-              />
-            </label>
+            {/* Remove password edit from here to avoid accidental resets */}
 
             <label>
               Role:
-              <input
-                type="text"
-                name="role"
-                value={editFormData.role}
-                onChange={handleEditInputChange}
-                required
-              />
+              <select name="role" value={editFormData.role} onChange={handleEditInputChange} required>
+                <option value="">Select role</option>
+                <option value="co-manager">co-manager</option>
+                <option value="cashier">cashier</option>
+                <option value="waiter">waiter</option>
+                <option value="cleaner">cleaner</option>
+                <option value="manager">manager</option>
+                <option value="accountant">accountant</option>
+              </select>
             </label>
 
             <div className="modal-buttons">
