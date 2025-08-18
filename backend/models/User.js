@@ -25,8 +25,18 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['admin','accountant', 'cashier'],
+      enum: ['admin', 'accountant', 'cashier', 'manager', 'co-manager', 'waiter', 'cleaner'],
       default: 'cashier',
+    },
+    monthlySalary: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    recievedPayments: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     active: { 
       type: Boolean,
