@@ -1,19 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { Badge, Button, Table, Form, Card, Row, Col, Modal } from 'react-bootstrap';
-import moment from 'moment';
+// moment not used after removing items section
 import { useNavigate } from 'react-router-dom';
 
 export default function InventoryDashboard() {
   const navigate = useNavigate();
   const [ingredients, setIngredients] = useState([]);
-  const [menuItems, setMenuItems] = useState([]);
+  // Removed menu items management
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [reorderQtys, setReorderQtys] = useState({}); // Track quantities per item
   
   // Modal states
   const [showAddIngredient, setShowAddIngredient] = useState(false);
-  const [showAddItem, setShowAddItem] = useState(false);
+  // Removed Add Item modal state
   
   // Form states
   const [newIngredient, setNewIngredient] = useState({
@@ -24,13 +24,7 @@ export default function InventoryDashboard() {
     pricePerUnit: 0,
   });
   
-  const [newItem, setNewItem] = useState({
-    name: '',
-    category: '',
-    currentStock: 0,
-    price: 0,
-    alertThreshold: 5
-  });
+  // Removed new item form state
 
   // Stock management states
   const [stockQtys, setStockQtys] = useState({});
@@ -48,33 +42,19 @@ export default function InventoryDashboard() {
         return;
       }
 
-      // Fetch both ingredients and menu items
-      const [ingredientsResponse, itemsResponse] = await Promise.all([
-        fetch('/api/ingredients', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        }),
-        fetch('/api/items', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        })
-      ]);
+      // Fetch ingredients only
+      const ingredientsResponse = await fetch('/api/ingredients', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
 
       if (!ingredientsResponse.ok) {
         throw new Error(`Failed to fetch ingredients: ${ingredientsResponse.status}`);
       }
 
-      if (!itemsResponse.ok) {
-        throw new Error(`Failed to fetch menu items: ${itemsResponse.status}`);
-      }
-
       const ingredientsData = await ingredientsResponse.json();
-      const itemsData = await itemsResponse.json();
-
       setIngredients(ingredientsData);
-      setMenuItems(itemsData);
     } catch (error) {
       console.error('Error fetching inventory:', error);
       setError(error.message);
@@ -102,16 +82,14 @@ export default function InventoryDashboard() {
       }
 
       // Find the current item to get its current stock
-      const currentItem = type === 'ingredient' 
-        ? ingredients.find(item => item._id === id)
-        : menuItems.find(item => item._id === id);
+      const currentItem = ingredients.find(item => item._id === id);
         
       if (!currentItem) {
         throw new Error('Item not found');
       }
 
       const newStock = currentItem.currentStock + qty;
-      const endpoint = type === 'ingredient' ? `/api/ingredients/${id}` : `/api/items/${id}`;
+      const endpoint = `/api/ingredients/${id}`;
 
       const response = await fetch(endpoint, {
         method: 'PUT',
@@ -130,26 +108,15 @@ export default function InventoryDashboard() {
 
       const updatedItem = await response.json();
       
-      // Update local state based on type
-      if (type === 'ingredient') {
-        setIngredients(prevItems =>
-          prevItems.map(item => {
-            if (item._id === id) {
-              return { ...item, currentStock: newStock };
-            }
-            return item;
-          })
-        );
-      } else {
-        setMenuItems(prevItems =>
-          prevItems.map(item => {
-            if (item._id === id) {
-              return { ...item, currentStock: newStock };
-            }
-            return item;
-          })
-        );
-      }
+      // Update local state
+      setIngredients(prevItems =>
+        prevItems.map(item => {
+          if (item._id === id) {
+            return { ...item, currentStock: newStock };
+          }
+          return item;
+        })
+      );
 
       alert(`Successfully reordered ${qty} units of ${updatedItem.name}.`);
       console.log(`Email/SMS sent: Reordered ${qty} units of ${updatedItem.name}`);
@@ -182,9 +149,7 @@ export default function InventoryDashboard() {
         return;
       }
 
-      const endpoint = type === 'ingredient' 
-        ? `/api/ingredients/${id}/stock` 
-        : `/api/items/${id}/stock`;
+      const endpoint = `/api/ingredients/${id}/stock`;
 
       const response = await fetch(endpoint, {
         method: 'PATCH',
@@ -205,26 +170,15 @@ export default function InventoryDashboard() {
 
       const updatedItem = await response.json();
       
-      // Update local state based on type
-      if (type === 'ingredient') {
-        setIngredients(prevItems =>
-          prevItems.map(item => {
-            if (item._id === id) {
-              return { ...item, currentStock: updatedItem.currentStock };
-            }
-            return item;
-          })
-        );
-      } else {
-        setMenuItems(prevItems =>
-          prevItems.map(item => {
-            if (item._id === id) {
-              return { ...item, currentStock: updatedItem.currentStock };
-            }
-            return item;
-          })
-        );
-      }
+      // Update local state
+      setIngredients(prevItems =>
+        prevItems.map(item => {
+          if (item._id === id) {
+            return { ...item, currentStock: updatedItem.currentStock };
+          }
+          return item;
+        })
+      );
 
       alert(`Successfully ${operation === 'add' ? 'added' : 'subtracted'} ${qty} units of ${updatedItem.name}.`);
       
@@ -250,9 +204,7 @@ export default function InventoryDashboard() {
         return;
       }
 
-      const endpoint = type === 'ingredient' 
-        ? `/api/ingredients/${id}` 
-        : `/api/items/${id}`;
+      const endpoint = `/api/ingredients/${id}`;
 
       const response = await fetch(endpoint, {
         method: 'DELETE',
@@ -266,11 +218,7 @@ export default function InventoryDashboard() {
       }
 
       // Update local state
-      if (type === 'ingredient') {
-        setIngredients(prevItems => prevItems.filter(item => item._id !== id));
-      } else {
-        setMenuItems(prevItems => prevItems.filter(item => item._id !== id));
-      }
+      setIngredients(prevItems => prevItems.filter(item => item._id !== id));
 
       alert(`Successfully deleted ${type}.`);
       
@@ -313,7 +261,8 @@ export default function InventoryDashboard() {
         name: '',
         currentStock: 0,
         unit: '',
-        alertThreshold: 5
+        alertThreshold: 5,
+        pricePerUnit: 0,
       });
       setShowAddIngredient(false);
       
@@ -325,51 +274,7 @@ export default function InventoryDashboard() {
     }
   };
 
-  // Add new item function
-  const handleAddItem = async (e) => {
-    e.preventDefault();
-    
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        alert('Authentication required. Please login again.');
-        return;
-      }
-
-      const response = await fetch('/api/items', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(newItem)
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to add item: ${response.status}`);
-      }
-
-      const addedItem = await response.json();
-      setMenuItems(prev => [...prev, addedItem]);
-      
-      // Reset form and close modal
-      setNewItem({
-        name: '',
-        category: '',
-        currentStock: 0,
-        price: 0,
-        alertThreshold: 5
-      });
-      setShowAddItem(false);
-      
-      alert(`Successfully added item: ${addedItem.name}`);
-      
-    } catch (error) {
-      console.error('Error adding item:', error);
-      alert(`Error adding item: ${error.message}`);
-    }
-  };
+  // removed add item function
 
   const checkLowStock = (item) => item.currentStock <= item.alertThreshold;
 
@@ -460,14 +365,7 @@ export default function InventoryDashboard() {
             <i className="fas fa-plus"></i>
             Add Ingredient
           </Button>
-          <Button 
-            variant="primary" 
-            onClick={() => setShowAddItem(true)}
-            className="d-flex align-items-center gap-2"
-          >
-            <i className="fas fa-plus"></i>
-            Add Item
-          </Button>
+          {/* Removed Add Item button */}
           <Button 
             variant="outline-primary" 
             onClick={fetchInventory}
@@ -489,16 +387,7 @@ export default function InventoryDashboard() {
 
       {/* Summary Cards */}
       <Row className="mb-5">
-        <Col md={3}>
-          <Card className="text-center border-primary">
-            <Card.Body>
-              <i className="fas fa-utensils text-primary" style={{ fontSize: '2rem' }}></i>
-              <h4 className="mt-2 mb-1">{menuItems.length}</h4>
-              <p className="text-muted mb-0">Menu Items</p>
-            </Card.Body>
-          </Card>
-        </Col>
-        <Col md={3}>
+        <Col md={4}>
           <Card className="text-center border-success">
             <Card.Body>
               <i className="fas fa-carrot text-success" style={{ fontSize: '2rem' }}></i>
@@ -507,25 +396,23 @@ export default function InventoryDashboard() {
             </Card.Body>
           </Card>
         </Col>
-        <Col md={3}>
+        <Col md={4}>
           <Card className="text-center border-warning">
             <Card.Body>
               <i className="fas fa-exclamation-triangle text-warning" style={{ fontSize: '2rem' }}></i>
               <h4 className="mt-2 mb-1">
-                {menuItems.filter(item => checkLowStock(item)).length + 
-                 ingredients.filter(item => checkLowStock(item)).length}
+                {ingredients.filter(item => checkLowStock(item)).length}
               </h4>
               <p className="text-muted mb-0">Low Stock Items</p>
             </Card.Body>
           </Card>
         </Col>
-        <Col md={3}>
+        <Col md={4}>
           <Card className="text-center border-danger">
             <Card.Body>
               <i className="fas fa-times-circle text-danger" style={{ fontSize: '2rem' }}></i>
               <h4 className="mt-2 mb-1">
-                {menuItems.filter(item => item.currentStock === 0).length + 
-                 ingredients.filter(item => item.currentStock === 0).length}
+                {ingredients.filter(item => item.currentStock === 0).length}
               </h4>
               <p className="text-muted mb-0">Out of Stock</p>
             </Card.Body>
@@ -533,99 +420,7 @@ export default function InventoryDashboard() {
         </Col>
       </Row>
 
-      {/* Menu Items Section */}
-      <Card className="mb-5 shadow-sm">
-        <Card.Header className="bg-primary text-white">
-          <h5 className="mb-0">
-            <i className="fas fa-utensils me-2"></i>
-            Menu Items (Finished Products)
-          </h5>
-        </Card.Header>
-        <Card.Body className="p-0">
-          <Table striped bordered hover className="mb-0">
-            <thead className="table-light">
-              <tr>
-                <th>Item Name</th>
-                <th>Category</th>
-                <th>Current Stock</th>
-                <th>Price</th>
-                <th>Alert Threshold</th>
-                <th>Status</th>
-                <th>Stock Management</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {menuItems.map(item => (
-                <tr key={item._id}>
-                  <td>
-                    <strong>{item.name}</strong>
-                  </td>
-                  <td>
-                    <Badge bg="info" className="text-capitalize">{item.category}</Badge>
-                  </td>
-                  <td>
-                    <span className={`fw-bold ${item.currentStock === 0 ? 'text-danger' : item.currentStock <= (item.alertThreshold || 5) ? 'text-warning' : 'text-success'}`}>
-                      {item.currentStock}
-                    </span>
-                  </td>
-                  <td>${item.price}</td>
-                  <td>{item.alertThreshold || 'N/A'}</td>
-                  <td>
-                    {checkLowStock(item) && <Badge bg="danger" className="me-1">Low Stock</Badge>}
-                    {item.currentStock === 0 && <Badge bg="warning">Out of Stock</Badge>}
-                    {!checkLowStock(item) && item.currentStock > 0 && <Badge bg="success">In Stock</Badge>}
-                  </td>
-                  <td>
-                    <div className="d-flex align-items-center gap-2">
-                      <Form.Control
-                        type="number"
-                        min="1"
-                        placeholder="Qty"
-                        value={stockQtys[item._id] || ''}
-                        onChange={e => handleStockChange(item._id, e.target.value)}
-                        style={{ width: '80px' }}
-                        className="form-control-sm"
-                      />
-                      <Button 
-                        size="sm" 
-                        variant="success" 
-                        onClick={() => handleStockUpdate(item._id, 'add', 'item')}
-                        className="d-flex align-items-center gap-1"
-                        title="Add Stock"
-                      >
-                        <i className="fas fa-plus"></i>
-                        <span className="d-none d-sm-inline">Add</span>
-                      </Button>
-                      <Button 
-                        size="sm" 
-                        variant="danger" 
-                        onClick={() => handleStockUpdate(item._id, 'subtract', 'item')}
-                        className="d-flex align-items-center gap-1"
-                        title="Subtract Stock"
-                      >
-                        <i className="fas fa-minus"></i>
-                        <span className="d-none d-sm-inline">Sub</span>
-                      </Button>
-                    </div>
-                  </td>
-                  <td>
-                    <Button 
-                      size="sm" 
-                      variant="danger" 
-                      onClick={() => handleDelete(item._id, 'item')}
-                      className="d-flex align-items-center gap-1"
-                    >
-                      <i className="fas fa-trash"></i>
-                      Delete
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card.Body>
-      </Card>
+      {/* Menu Items Section removed */}
 
       {/* Ingredients Section */}
       <Card className="mb-5 shadow-sm">
@@ -793,86 +588,7 @@ export default function InventoryDashboard() {
         </Form>
       </Modal>
 
-      {/* Add Item Modal */}
-      <Modal show={showAddItem} onHide={() => setShowAddItem(false)} className="mb-4">
-        <Modal.Header closeButton>
-          <Modal.Title>Add New Menu Item</Modal.Title>
-        </Modal.Header>
-        <Form onSubmit={handleAddItem}>
-          <Modal.Body>
-            <Form.Group className="mb-3">
-              <Form.Label>Item Name</Form.Label>
-              <Form.Control
-                type="text"
-                value={newItem.name}
-                onChange={(e) => setNewItem({...newItem, name: e.target.value})}
-                required
-              />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Category</Form.Label>
-              <Form.Select
-                value={newItem.category}
-                onChange={(e) => setNewItem({...newItem, category: e.target.value})}
-                required
-              >
-                <option value="">Select Category</option>
-                <option value="plate">Plate</option>
-                <option value="sandwich">Sandwich</option>
-                <option value="drink">Drink</option>
-                <option value="burger">Burger</option>
-                <option value="pizza">Pizza</option>
-                <option value="dessert">Dessert</option>
-                <option value="beverage">Beverage</option>
-                <option value="fries">Fries</option>
-                <option value="spirits">Spirits</option>
-                <option value="pancakes">Pancakes</option>
-                <option value="cake">Cake</option>
-                <option value="juice">Juice</option>
-              </Form.Select>
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Current Stock</Form.Label>
-              <Form.Control
-                type="number"
-                min="0"
-                value={newItem.currentStock}
-                onChange={(e) => setNewItem({...newItem, currentStock: parseInt(e.target.value)})}
-                required
-              />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Price</Form.Label>
-              <Form.Control
-                type="number"
-                min="0"
-                step="0.01"
-                value={newItem.price}
-                onChange={(e) => setNewItem({...newItem, price: parseFloat(e.target.value)})}
-                required
-              />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Alert Threshold</Form.Label>
-              <Form.Control
-                type="number"
-                min="1"
-                value={newItem.alertThreshold}
-                onChange={(e) => setNewItem({...newItem, alertThreshold: parseInt(e.target.value)})}
-                required
-              />
-            </Form.Group>
-          </Modal.Body>
-          <Modal.Footer>
-            <Button variant="secondary" onClick={() => setShowAddItem(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" type="submit">
-              Add Item
-            </Button>
-          </Modal.Footer>
-        </Form>
-      </Modal>
+      {/* Add Item Modal removed */}
     </div>  
   );
 }

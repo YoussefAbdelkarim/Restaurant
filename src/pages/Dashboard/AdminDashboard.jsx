@@ -42,6 +42,7 @@ function SidebarItem({ to, children }) {
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(true);
+  const role = (typeof window !== 'undefined' && localStorage.getItem('role')) || '';
 
   return (
     <div className="d-flex" style={{ minHeight: '100vh' }}>
@@ -76,7 +77,10 @@ export default function AdminDashboard() {
                   { name: 'Analytics', to: '/AdminDashboard/analytics' },       
                   { name: 'Inventory', to: '/AdminDashboard/inventory' }, 
                   { name: 'Payments', to: '/AdminDashboard/payments' },        
-                ].map(({ name, to }) => (
+                ]
+                  // hide all dashboard entries if cleaner
+                  .filter(item => role !== 'cleaner')
+                  .map(({ name, to }) => (
                   <li className="nav-item mb-2" key={name}>
                     <SidebarItem to={to}>{name}</SidebarItem>
                   </li>
@@ -108,17 +112,17 @@ export default function AdminDashboard() {
 
         <div>
           <Routes>
-            <Route path="ai" element={<AI />} />
-            <Route path="statistics" element={<Statistics />} />
-            <Route path="ViewEmployees" element={<ViewEmployees />} />
-            <Route path="CreateEmployee" element={<CreateEmployee />} /> 
-            <Route path="menu" element={<ManageMenu />} />
-            <Route path="orders" element={<Orders />} /> 
-            <Route path="addOrder" element={<AddOrder />} />
-            <Route path="analytics" element={<AnalyticsDashboard orders={dummyOrders} />} />
-            <Route path="inventory" element={<InventoryDashboard />} />
-            <Route path="payments" element={<Payments />} />
-            <Route path="addPayment" element={<AddPayment />} />
+            {role !== 'cleaner' && <Route path="ai" element={<AI />} />}
+            {role !== 'cleaner' && <Route path="statistics" element={<Statistics />} />}
+            {role !== 'cleaner' && <Route path="ViewEmployees" element={<ViewEmployees />} />}
+            {role !== 'cleaner' && <Route path="CreateEmployee" element={<CreateEmployee />} />}
+            {role !== 'cleaner' && <Route path="menu" element={<ManageMenu />} />}
+            {role !== 'cleaner' && <Route path="orders" element={<Orders />} />}
+            {role !== 'cleaner' && <Route path="addOrder" element={<AddOrder />} />}
+            {role !== 'cleaner' && <Route path="analytics" element={<AnalyticsDashboard orders={dummyOrders} />} />}
+            {role !== 'cleaner' && <Route path="inventory" element={<InventoryDashboard />} />}
+            {role !== 'cleaner' && <Route path="payments" element={<Payments />} />}
+            {role !== 'cleaner' && <Route path="addPayment" element={<AddPayment />} />}
           </Routes>
         </div>
       </div>  

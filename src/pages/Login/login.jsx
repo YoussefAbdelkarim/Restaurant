@@ -22,6 +22,9 @@ function AdminLogin() {
       if (response.data.token) {
         // Store the JWT token
         localStorage.setItem('token', response.data.token);
+        if (response.data.role) {
+          localStorage.setItem('role', response.data.role);
+        }
         localStorage.setItem('adminLoggedIn', 'true');
         navigate('/AdminDashboard');
       } else {
