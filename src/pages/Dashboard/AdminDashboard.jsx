@@ -13,6 +13,7 @@ import { dummyOrders, dummyInventory } from './DummyData';
 import Payments from './payments';
 import AddPayment from './AddPayment';
 import { FaBars, FaTimes } from "react-icons/fa";
+import DailyInventory from './DailyInventory';
 
 function SidebarItem({ to, children }) {
   const [hover, setHover] = useState(false);
@@ -76,7 +77,8 @@ export default function AdminDashboard() {
                   { name: 'Orders', to: '/AdminDashboard/orders' },
                   { name: 'Analytics', to: '/AdminDashboard/analytics' },       
                   { name: 'Inventory', to: '/AdminDashboard/inventory' }, 
-                  { name: 'Payments', to: '/AdminDashboard/payments' },        
+                  { name: 'Payments', to: '/AdminDashboard/payments' },
+                  { name: 'Daily Inventory', to: '/AdminDashboard/daily' },        
                 ]
                   // hide all dashboard entries if cleaner
                   .filter(item => role !== 'cleaner')
@@ -123,6 +125,7 @@ export default function AdminDashboard() {
             {role !== 'cleaner' && <Route path="inventory" element={<InventoryDashboard />} />}
             {role !== 'cleaner' && <Route path="payments" element={<Payments />} />}
             {role !== 'cleaner' && <Route path="addPayment" element={<AddPayment />} />}
+            {role !== 'cleaner' && <Route path="daily" element={<DailyInventory />} />}
           </Routes>
         </div>
       </div>  

@@ -44,8 +44,19 @@ const createItem = async (req, res) => {
 
 const getItems = async (req, res) => {
   try {
-    const items = await Item.find({});
-    res.json(items);
+    const items = await Item.find({}).populate('ingredients.ingredient', 'name unit');
+    // Normalize ingredients to always include name/unit for frontend display
+    const normalized = items.map(it => {
+      const obj = it.toObject();
+      obj.ingredients = (obj.ingredients || []).map(r => ({
+        ingredient: r.ingredient?._id || r.ingredient,
+        name: r.name || r.ingredient?.name || '',
+        unit: r.unit || r.ingredient?.unit || '',
+        quantity: r.quantity
+      }));
+      return obj;
+    });
+    res.json(normalized);
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
