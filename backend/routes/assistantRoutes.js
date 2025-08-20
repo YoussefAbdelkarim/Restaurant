@@ -37,9 +37,11 @@ function getPythonPath() {
 const pythonPath = getPythonPath();
 const scriptPath = path.join(__dirname, "..", "assistant.py");
 
-// Log the Python path being used
-console.log(`Using Python path: ${pythonPath}`);
-console.log(`Using script path: ${scriptPath}`);
+// Log paths only in development
+if (process.env.NODE_ENV !== 'production') {
+  console.log(`Using Python path: ${pythonPath}`);
+  console.log(`Using script path: ${scriptPath}`);
+}
 
 // Note: Python assistant fetches inventory directly from DB; no need to load it here
 
