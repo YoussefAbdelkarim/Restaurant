@@ -90,6 +90,10 @@ export default function Payments() {
             <th>Details</th>
             <th>Amount</th>
             <th>Date</th>
+<<<<<<< Updated upstream
+=======
+           
+>>>>>>> Stashed changes
           </tr>
         </thead>
         <tbody>
@@ -110,7 +114,12 @@ export default function Payments() {
                   )}
                 </td>
                 <td>${p.amount}</td>
+<<<<<<< Updated upstream
                 <td>{p.date}</td>
+=======
+                <td>{new Date(p.date).toLocaleDateString()}</td>
+                
+>>>>>>> Stashed changes
               </tr>
             ))
           ) : (
