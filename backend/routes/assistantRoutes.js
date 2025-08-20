@@ -41,17 +41,7 @@ const scriptPath = path.join(__dirname, "..", "assistant.py");
 console.log(`Using Python path: ${pythonPath}`);
 console.log(`Using script path: ${scriptPath}`);
 
-async function fetchInventoryFromDB() {
-  // Fetch live inventory from MongoDB (Ingredients collection)
-  const ingredients = await Ingredient.find({});
-  const inventory = {};
-  ingredients.forEach((item) => {
-    // Note: use currentStock or quantity field depending on your model
-    // Here assuming 'currentStock' as per your Ingredient.js schema
-    inventory[item.name.toLowerCase()] = item.currentStock ?? 0;
-  });
-  return inventory;
-}
+// Note: Python assistant fetches inventory directly from DB; no need to load it here
 
 router.post("/ask", async (req, res) => {
   try {
@@ -60,11 +50,11 @@ router.post("/ask", async (req, res) => {
       return res.status(400).json({ error: "No text provided" });
     }
 
-    const inventory = await fetchInventoryFromDB();
-
     // Pass the user text as a single argument to assistant.py
     // The Python script will fetch inventory live from DB itself, so no need to write inventory.json
-    const python = spawn(pythonPath, [scriptPath, text]);
+    const python = spawn(pythonPath, [scriptPath, text], {
+      env: { ...process.env, ASSISTANT_DEBUG: process.env.ASSISTANT_DEBUG || "0" }
+    });
 
     let data = "";
     let errorOutput = "";
@@ -87,15 +77,22 @@ router.post("/ask", async (req, res) => {
     });
 
     python.on("close", (code) => {
-      if (code !== 0 || errorOutput) {
-        console.error("Python process error output:", errorOutput);
+      if (errorOutput) {
+        // Log stderr but do not fail the request if exit code is 0
+        console.warn("Python stderr:", errorOutput.trim());
+      }
+      if (code !== 0) {
         return res.status(500).json({
           error: "Python process failed",
           code,
           stderr: errorOutput.trim(),
         });
       }
-      res.json({ reply: data.trim() });
+      const reply = (data || "").trim();
+      if (!reply) {
+        return res.status(500).json({ error: "Empty reply from assistant" });
+      }
+      res.json({ reply });
     });
   } catch (err) {
     console.error("Assistant error:", err);

@@ -60,7 +60,8 @@ exports.createOrder = async (req, res) => {
     if (!inventoryResult.success) {
       return res.status(400).json({ 
         message: 'Cannot fulfill order due to insufficient inventory',
-        errors: inventoryResult.errors
+        errors: inventoryResult.errors,
+        details: inventoryResult
       });
     }
 

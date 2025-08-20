@@ -1,15 +1,33 @@
 import React, { useState, useEffect } from "react";
 import { Form, Button, Card, Row, Col, Modal } from "react-bootstrap";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 export default function AddPayment() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [paymentType, setPaymentType] = useState("salary");
   const [users, setUsers] = useState([]);
   const [ingredients, setIngredients] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showAddIngredient, setShowAddIngredient] = useState(false);
   const [newIngredient, setNewIngredient] = useState({ name: '', unit: '', currentStock: 0, alertThreshold: 5, pricePerUnit: 0 });
+
+  // Initialize from navigation state (e.g., Restock button from Inventory)
+  useEffect(() => {
+    const state = location.state || {};
+    if (state.initPaymentType === 'purchase') {
+      setPaymentType('purchase');
+      setFormData(prev => {
+        const baseLines = (prev.purchaseIngredients && prev.purchaseIngredients.length)
+          ? prev.purchaseIngredients
+          : [{ ingredientId: '', quantity: '', unitPrice: '' }];
+        if (state.preselectIngredientId) {
+          baseLines[0] = { ...baseLines[0], ingredientId: state.preselectIngredientId };
+        }
+        return { ...prev, purchaseIngredients: baseLines };
+      });
+    }
+  }, [location.state]);
 
   // Fetch users for salary payments
   useEffect(() => {

@@ -14,6 +14,7 @@ const oldIngredientSchema = new mongoose.Schema(
     },
     unit: {
       type: String,
+      enum: ['g', 'kg', 'l', 'ml', 'piece', 'unit'],
       required: [true, 'Unit is required'],
     },
     currentStock: {

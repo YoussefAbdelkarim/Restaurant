@@ -17,7 +17,7 @@ const recipeIngredientSchema = new mongoose.Schema({
   },
   unit: {
     type: String,
-    enum: ['g', 'kg', 'l', 'piece', 'unit'],
+    enum: ['g', 'kg', 'l', 'ml', 'piece', 'unit'],
     required: true,
   },
 }, { _id: false });
@@ -33,9 +33,10 @@ const itemSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
-    cost:{
-      type: Number,
-      default: 0,
+    instructions: {
+      type: String,
+      trim: true,
+      default: '',
     },
     price: {
       type: Number,
@@ -48,23 +49,20 @@ const itemSchema = new mongoose.Schema(
     },
     ingredients: [recipeIngredientSchema],
 
-    imageUrl: {
-      type: String,
-      default: '',
-    },
     isAvailable: {
       type: Boolean,
       default: true,
     },
+    soldCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    steps: {
+      type: [String],
+      default: [],
+    },
 
-    currentStock: {
-      type: Number,
-      default: 100,
-    },
-    alertThreshold: {
-      type: Number,
-      default: 20,
-    },
   },
   {
     timestamps: true,

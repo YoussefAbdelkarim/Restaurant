@@ -15,8 +15,29 @@ const AddOrder = () => {
   const [itemsList, setItemsList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [ingredientsInventory, setIngredientsInventory] = useState([]);
 
-  // Fetch available menu items (from backend)
+  // Simple unit conversion to align recipe requirement with inventory unit
+  const convertToInventoryUnit = (requirementUnit, inventoryUnit, quantity) => {
+    if (!requirementUnit || !inventoryUnit) return quantity;
+    const baseInfo = (u) => {
+      switch ((u || '').toLowerCase()) {
+        case 'g': return { base: 'g', factor: 1 };
+        case 'kg': return { base: 'g', factor: 1000 };
+        case 'ml': return { base: 'ml', factor: 1 };
+        case 'l': return { base: 'ml', factor: 1000 };
+        case 'piece': return { base: 'piece', factor: 1 };
+        case 'unit': return { base: 'unit', factor: 1 };
+        default: return { base: (u || '').toLowerCase(), factor: 1 };
+      }
+    };
+    const req = baseInfo(requirementUnit);
+    const inv = baseInfo(inventoryUnit);
+    if (req.base !== inv.base) return quantity; // not convertible; assume already aligned
+    return (quantity * req.factor) / inv.factor;
+  };
+
+  // Fetch available menu items and inventory ingredients (from backend)
   useEffect(() => {
     const fetchItems = async () => {
       try {
@@ -36,15 +57,31 @@ const AddOrder = () => {
         if (!res.ok) throw new Error("Failed to fetch menu items");
         const data = await res.json();
         setItemsList(data);
-        setLoading(false);
       } catch (error) {
         console.error("Error fetching items:", error);
         setError(error.message);
+      }
+    };
+
+    const fetchIngredients = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        const res = await fetch('/api/ingredients', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Failed to fetch ingredients');
+        const data = await res.json();
+        setIngredientsInventory(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error('Error fetching ingredients:', err);
+      } finally {
         setLoading(false);
       }
     };
 
     fetchItems();
+    fetchIngredients();
   }, []);
 
   // Handle input changes for order items
@@ -92,8 +129,48 @@ const AddOrder = () => {
 
     // Client-side validation
     const validationErrors = validateOrderQuantities();
-    if (validationErrors.length > 0) {
-      alert(`Cannot fulfill order due to insufficient inventory:\n${validationErrors.join('\n')}`);
+    // Also block if any ingredient is missing or insufficient in aggregate
+    const aggregateShortages = (() => {
+      const invById = new Map(ingredientsInventory.map(ing => [String(ing._id), ing]));
+      const invByName = new Map(ingredientsInventory.map(ing => [String(ing.name || '').trim().toLowerCase(), ing]));
+      const required = [];
+      for (const orderItem of form.items) {
+        if (!orderItem.item) continue;
+        const menuItem = itemsList.find(it => it._id === orderItem.item);
+        if (!menuItem || !Array.isArray(menuItem.ingredients)) continue;
+        for (const r of menuItem.ingredients) {
+          const rawNeed = Number(r.quantity || 0) * Number(orderItem.quantity || 0);
+          const idKey = r.ingredient ? String(r.ingredient) : null;
+          const nameKey = String(r.name || '').trim().toLowerCase();
+          required.push({ idKey, nameKey, rawNeed, reqUnit: r.unit, displayName: r.name || nameKey });
+        }
+      }
+      const messages = [];
+      for (const req of required) {
+        const invRow = (req.idKey && invById.get(req.idKey)) || invByName.get(req.nameKey);
+        if (!invRow) {
+          messages.push(`You don't have ${req.displayName} in inventory.`);
+        } else {
+          const have = Number(invRow.currentStock || 0);
+          const unit = invRow.unit || '';
+          if (invRow.isManuallyOutOfStock) {
+            messages.push(`${invRow.name} is flagged Out of Stock.`);
+            continue;
+          }
+          const need = convertToInventoryUnit(req.reqUnit, unit, req.rawNeed);
+          if (have <= 0) {
+            messages.push(`You have 0 ${unit} of ${invRow.name}.`);
+          } else if (have < need) {
+            messages.push(`Not enough ${invRow.name}: need ${need} ${unit}, have ${have} ${unit}.`);
+          }
+        }
+      }
+      return messages;
+    })();
+
+    const allErrors = [...validationErrors, ...aggregateShortages];
+    if (allErrors.length > 0) {
+      alert(`Cannot fulfill order due to insufficient inventory:\n${allErrors.join('\n')}`);
       return;
     }
 
@@ -131,25 +208,6 @@ const AddOrder = () => {
       <h3 className="add-order-title">Add Order</h3>
 
       <form onSubmit={handleSubmit}>
-        {/* Payment Status */}
-        <div className="form-group">
-          <label><h5>Payment Status</h5></label>
-          <div className="status-options">
-            {["Canceled", "paid", "pending"].map((status) => (
-              <label key={status} style={{ marginRight: "10px" }}>
-                <input
-                  type="radio"
-                  name="status"
-                  value={status}
-                  className="custom-radio"
-                  checked={form.status === status}
-                  onChange={(e) => setForm({ ...form, status: e.target.value })}
-                />
-                {status}
-              </label>
-            ))}
-          </div>
-        </div>
 
         {/* Order Items Table */}
         <h5 className="mb-3">Order Items</h5>
@@ -216,6 +274,28 @@ const AddOrder = () => {
                   {orderItem.item && (() => {
                     const menuItem = itemsList.find(item => item._id === orderItem.item);
                     if (menuItem && Array.isArray(menuItem.ingredients) && menuItem.ingredients.length) {
+                      const inventoryById = new Map(ingredientsInventory.map(ing => [String(ing._id), ing]));
+                      const inventoryByName = new Map(ingredientsInventory.map(ing => [String(ing.name || '').trim().toLowerCase(), ing]));
+                      const shortages = [];
+                      for (const r of menuItem.ingredients) {
+                        const ingName = String(r.name || '').trim();
+                        const key = ingName.toLowerCase();
+                        const rawNeed = Number(r.quantity || 0) * Number(orderItem.quantity || 0);
+                        const invRow = (r.ingredient && inventoryById.get(String(r.ingredient))) || inventoryByName.get(key);
+                        if (!invRow) {
+                          shortages.push(`You don't have ${ingName} in inventory.`);
+                        } else {
+                          const have = Number(invRow.currentStock || 0);
+                          const need = convertToInventoryUnit(r.unit, invRow.unit, rawNeed);
+                          if (invRow.isManuallyOutOfStock) {
+                            shortages.push(`${ingName} is flagged Out of Stock.`);
+                          } else if (have <= 0) {
+                            shortages.push(`You have 0 ${invRow.unit || ''} of ${ingName}.`);
+                          } else if (have < need) {
+                            shortages.push(`Not enough ${ingName}: need ${need} ${invRow.unit || ''}, have ${have} ${invRow.unit || ''}.`);
+                          }
+                        }
+                      }
                       return (
                         <tr>
                           <td colSpan="3" style={{ background: '#fafafa' }}>
@@ -226,6 +306,13 @@ const AddOrder = () => {
                                   <div key={i}>- {r.name}: {r.quantity * orderItem.quantity} {r.unit}</div>
                                 ))}
                               </div>
+                              {shortages.length > 0 && (
+                                <div style={{ color: 'red', marginTop: '8px' }}>
+                                  {shortages.map((msg, i) => (
+                                    <div key={i}>{msg}</div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -314,18 +401,58 @@ const AddOrder = () => {
 
         {/* Submit & Cancel Buttons */}
         <div className="modal-buttons">
-          <button
-            type="submit"
-            style={{ backgroundColor: "green", color: "white" }}
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate("/AdminDashboard/orders")}
-          >
-            Cancel
-          </button>
+          {(() => {
+            // Compute disabled state and tooltip once for consistent logic and styling
+            const invById = new Map(ingredientsInventory.map(ing => [String(ing._id), ing]));
+            const invByName = new Map(ingredientsInventory.map(ing => [String(ing.name || '').trim().toLowerCase(), ing]));
+            const required = [];
+            for (const orderItem of form.items) {
+              if (!orderItem.item) continue;
+              const menuItem = itemsList.find(it => it._id === orderItem.item);
+              if (!menuItem || !Array.isArray(menuItem.ingredients)) continue;
+              for (const r of menuItem.ingredients) {
+                const idKey = r.ingredient ? String(r.ingredient) : null;
+                const nameKey = String(r.name || '').trim().toLowerCase();
+                const rawNeed = Number(r.quantity || 0) * Number(orderItem.quantity || 0);
+                required.push({ idKey, nameKey, rawNeed, reqUnit: r.unit, displayName: r.name || nameKey });
+              }
+            }
+            let disabled = loading;
+            const msgs = [];
+            for (const req of required) {
+              const invRow = (req.idKey && invById.get(req.idKey)) || invByName.get(req.nameKey);
+              if (!invRow) {
+                disabled = true;
+                msgs.push(`Missing: ${req.displayName}`);
+              } else {
+                const have = Number(invRow.currentStock || 0);
+                const unit = invRow.unit || '';
+                const need = convertToInventoryUnit(req.reqUnit, unit, req.rawNeed);
+                if (invRow.isManuallyOutOfStock) {
+                  disabled = true;
+                  msgs.push(`${invRow.name} is OOS`);
+                } else if (have <= 0) {
+                  disabled = true;
+                  msgs.push(`0 ${unit} of ${invRow.name}`);
+                } else if (have < need) {
+                  disabled = true;
+                  msgs.push(`Need ${need} ${unit} ${invRow.name}, have ${have}`);
+                }
+              }
+            }
+            const title = msgs.length ? msgs.join('; ') : undefined;
+            const style = disabled
+              ? { backgroundColor: '#9e9e9e', color: 'white', cursor: 'not-allowed', opacity: 0.6 }
+              : { backgroundColor: 'green', color: 'white', cursor: 'pointer' };
+            return (
+              <>
+                <button type="submit" style={style} disabled={disabled} title={title}>Save</button>
+                <button type="button" onClick={() => navigate("/AdminDashboard/orders")}>
+                  Cancel
+                </button>
+              </>
+            );
+          })()}
         </div>
       </form>
     </div>

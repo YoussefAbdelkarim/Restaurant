@@ -10,6 +10,7 @@ export default function InventoryDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [reorderQtys, setReorderQtys] = useState({}); // Track quantities per item
+  const [searchQuery, setSearchQuery] = useState('');
   
   // Modal states
   const [showAddIngredient, setShowAddIngredient] = useState(false);
@@ -28,6 +29,15 @@ export default function InventoryDashboard() {
 
   // Stock management states
   const [stockQtys, setStockQtys] = useState({});
+
+  // Display helper: pluralize piece → pieces when quantity != 1
+  const formatUnit = (unit, quantity) => {
+    if (!unit) return '';
+    if (unit === 'piece') {
+      return Number(quantity) === 1 ? 'piece' : 'pieces';
+    }
+    return unit;
+  };
 
   useEffect(() => {
     fetchInventory();
@@ -191,6 +201,55 @@ export default function InventoryDashboard() {
     }
   };
 
+  const handleToggleManualOos = async (id) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Authentication required. Please login again.');
+        return;
+      }
+      const res = await fetch(`/api/ingredients/${id}/manual-oos`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || 'Failed to toggle out-of-stock flag');
+      }
+      const updated = await res.json();
+      setIngredients(prev => prev.map(it => it._id === id ? updated : it));
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+
+  const handleSetStockZero = async (id) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Authentication required. Please login again.');
+        return;
+      }
+      const endpoint = `/api/ingredients/${id}`;
+      const response = await fetch(endpoint, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ currentStock: 0 })
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.message || 'Failed to set stock to zero');
+      }
+      const updated = await response.json();
+      setIngredients(prev => prev.map(it => it._id === id ? updated : it));
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+
   // Delete functions
   const handleDelete = async (id, type = 'ingredient') => {
     if (!window.confirm(`Are you sure you want to delete this ${type}?`)) {
@@ -227,6 +286,8 @@ export default function InventoryDashboard() {
       alert(`Error deleting ${type}: ${error.message}`);
     }
   };
+
+  // Formatting helpers (not used; show stock and unit in separate columns)
 
   // Add new ingredient function
   const handleAddIngredient = async (e) => {
@@ -277,6 +338,12 @@ export default function InventoryDashboard() {
   // removed add item function
 
   const checkLowStock = (item) => item.currentStock <= item.alertThreshold;
+
+  const visibleIngredients = (() => {
+    const q = String(searchQuery || '').trim().toLowerCase();
+    if (!q) return ingredients;
+    return ingredients.filter(it => String(it.name || '').toLowerCase().includes(q));
+  })();
 
   if (loading) {
     return (
@@ -425,10 +492,20 @@ export default function InventoryDashboard() {
       {/* Ingredients Section */}
       <Card className="mb-5 shadow-sm">
         <Card.Header className="bg-success text-white">
-          <h5 className="mb-0">
-            <i className="fas fa-carrot me-2"></i>
-            Raw Ingredients
-          </h5>
+          <div className="d-flex justify-content-between align-items-center">
+            <h5 className="mb-0">
+              <i className="fas fa-carrot me-2"></i>
+              Raw Ingredients
+            </h5>
+            <Form.Control
+              type="search"
+              placeholder="Search ingredients..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{ maxWidth: '280px' }}
+              className="form-control-sm"
+            />
+          </div>
         </Card.Header>
         <Card.Body className="p-0">
           <Table striped bordered hover className="mb-0">
@@ -444,10 +521,13 @@ export default function InventoryDashboard() {
               </tr>
             </thead>
             <tbody>
-              {ingredients.map(item => (
+              {visibleIngredients.map(item => (
                 <tr key={item._id}>
                   <td>
                     <strong>{item.name}</strong>
+                    {item.isManuallyOutOfStock && (
+                      <Badge bg="dark" className="ms-2">Manually OOS</Badge>
+                    )}
                   </td>
                   <td>
                     <span className={`fw-bold ${item.currentStock === 0 ? 'text-danger' : item.currentStock <= item.alertThreshold ? 'text-warning' : 'text-success'}`}>
@@ -455,7 +535,7 @@ export default function InventoryDashboard() {
                     </span>
                   </td>
                   <td>
-                    <Badge bg="secondary">{item.unit}</Badge>
+                    <Badge bg="secondary">{formatUnit(item.unit, item.currentStock)}</Badge>
                   </td>
                   <td>{item.alertThreshold}</td>
                   <td>
@@ -474,6 +554,22 @@ export default function InventoryDashboard() {
                         style={{ width: '80px' }}
                         className="form-control-sm"
                       />
+                      <Button
+                        size="sm"
+                        variant={item.isManuallyOutOfStock ? 'secondary' : 'outline-secondary'}
+                        onClick={() => handleToggleManualOos(item._id)}
+                        title="Toggle manual out-of-stock"
+                      >
+                        {item.isManuallyOutOfStock ? 'Unflag OOS' : 'Flag OOS'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline-dark"
+                        onClick={() => handleSetStockZero(item._id)}
+                        title="Set stock to 0"
+                      >
+                        Set 0
+                      </Button>
                       <Button 
                         size="sm" 
                         variant="success" 
@@ -484,16 +580,29 @@ export default function InventoryDashboard() {
                         <i className="fas fa-plus"></i>
                         <span className="d-none d-sm-inline">Add</span>
                       </Button>
-                      <Button 
-                        size="sm" 
-                        variant="danger" 
-                        onClick={() => handleStockUpdate(item._id, 'subtract', 'ingredient')}
-                        className="d-flex align-items-center gap-1"
-                        title="Subtract Stock"
-                      >
-                        <i className="fas fa-minus"></i>
-                        <span className="d-none d-sm-inline">Sub</span>
-                      </Button>
+                      { (item.currentStock === 0 || checkLowStock(item)) ? (
+                        <Button
+                          size="sm"
+                          variant="warning"
+                          onClick={() => navigate('/AdminDashboard/addPayment', { state: { initPaymentType: 'purchase', preselectIngredientId: item._id } })}
+                          className="d-flex align-items-center gap-1"
+                          title="Restock via Purchase"
+                        >
+                          <i className="fas fa-shopping-cart"></i>
+                          <span className="d-none d-sm-inline">Restock</span>
+                        </Button>
+                      ) : (
+                        <Button 
+                          size="sm" 
+                          variant="danger" 
+                          onClick={() => handleStockUpdate(item._id, 'subtract', 'ingredient')}
+                          className="d-flex align-items-center gap-1"
+                          title="Subtract Stock"
+                        >
+                          <i className="fas fa-minus"></i>
+                          <span className="d-none d-sm-inline">Sub</span>
+                        </Button>
+                      )}
                     </div>
                   </td>
                   <td>

@@ -1,713 +1,745 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+assistant.py — clean refactor
+
+Purpose
+-------
+A single-purpose restaurant assistant that:
+  1) Answers ONLY restaurant/menu/recipe/inventory questions.
+  2) If a dish exists in MongoDB -> returns it directly (no web).
+  3) If not, searches the web (DuckDuckGo) and composes a recipe via Gemini.
+     Then saves the new item into MongoDB (items collection).
+  4) Always checks the restaurant inventory (MongoDB 'ingredients' collection) and
+     tells the user whether all/none/some ingredients are available.
+  5) Uses Google Gemini as the final responder (structured prompt -> natural reply).
+  6) Automatically adds recipe ingredients to MongoDB ingredients collection.
+
+Environment
+----------
+  MONGO_URI          : MongoDB connection string (required)
+  MONGO_DB           : Optional DB name (defaults to 'test')
+  GOOGLE_API_KEY     : Gemini API key (required)
+  ASSISTANT_DEBUG    : Optional ('1' to print debug to stderr)
+
+Invocation
+----------
+  python assistant.py "<user question>"
+
+Output
+------
+  Prints a single UTF-8 string reply (what the Express route returns to the user).
+
+Dependencies
+-----------
+  pip install google-generativeai duckduckgo_search pymongo python-dotenv
+
+Notes
+-----
+  • We intentionally avoid non-restaurant topics.
+  • When saving to MongoDB we align with the Mongoose schema for items, but MongoDB
+    itself won't enforce it; we try to resolve Ingredient ObjectIds by name.
+  • Automatically adds missing ingredients to inventory when providing recipes.
+  • Works directly with MongoDB database instead of JSON files.
+"""
+
+from __future__ import annotations
 import os
-import json
-import asyncio
-import requests
-import certifi
-from typing import List, Dict, Optional, Any
-from dotenv import load_dotenv
-from pymongo import MongoClient
 import re
-from difflib import get_close_matches
-import google.generativeai as genai
-from pydantic import BaseModel
-from pydantic_ai import Agent
-from textwrap import dedent
-from datetime import datetime
+import sys
+import json
+import time
+import html
+import traceback
+from typing import Dict, List, Any, Tuple, Optional
 
-# ---------------- CUSTOM JSON ENCODER ----------------
-def safe_json_dumps(obj, **kwargs):
-    """Safely serialize objects to JSON, handling datetime and other non-serializable types"""
-    class SafeEncoder(json.JSONEncoder):
-        def default(self, obj):
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            # Handle MongoDB ObjectId
-            if hasattr(obj, '__str__'):
-                return str(obj)
-            return super().default(obj)
-    
-    return json.dumps(obj, cls=SafeEncoder, **kwargs)
+# Third-party
+from pymongo import MongoClient
+from bson import ObjectId
 
-# ---------------- ENV & DB SETUP ----------------
-load_dotenv("../.env")
+# Load environment from backend/.env and project root .env if present
+try:
+    from dotenv import load_dotenv
+    _here = os.path.dirname(__file__)
+    load_dotenv(os.path.join(_here, '.env'))
+    load_dotenv(os.path.join(_here, '..', '.env'))
+except Exception:
+    pass
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-if not GOOGLE_API_KEY:
-    raise ValueError("Missing GOOGLE_API_KEY in environment")
-# genai.configure(api_key=GOOGLE_API_KEY)  # Commented out due to version compatibility
+# DuckDuckGo search (dynamic import to avoid static lints when missing)
+try:
+    import importlib
+    _ddg = importlib.import_module('duckduckgo_search')
+    DDGS = getattr(_ddg, 'DDGS', None)
+except Exception:
+    DDGS = None
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB = os.getenv("MONGO_DB", "test")
+# Gemini
+try:
+    import google.generativeai as genai
+except Exception:
+    genai = None
 
-mongo_kwargs: Dict[str, Any] = {"serverSelectionTimeoutMS": 5000}
-if "mongodb.net" in MONGO_URI or MONGO_URI.startswith("mongodb+srv://"):
-    mongo_kwargs["tls"] = True
-    mongo_kwargs["tlsCAFile"] = certifi.where()
+# --------- Config / Helpers ---------
+DEBUG = os.environ.get("ASSISTANT_DEBUG", "0") == "1"
+MONGO_URI = os.environ.get("MONGO_URI")
+MONGO_DB = os.environ.get("MONGO_DB", "test")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+# Control side effects in DB
+AUTO_ADD_INGREDIENTS = os.environ.get("ASSISTANT_AUTO_ADD_INGREDIENTS", "0") == "1"
+AUTO_SAVE_ITEMS = os.environ.get("ASSISTANT_AUTO_SAVE_ITEMS", "0") == "1"
 
-client = MongoClient(MONGO_URI, **mongo_kwargs)
-db = client[MONGO_DB]
+RESTAURANT_KEYWORDS = [
+    "dish", "recipe", "ingredients", "prepare", "cook", "bake", "fry", "grill", "boil",
+    "menu", "item", "burger", "pizza", "drink", "juice", "fries", "dessert", "pancakes",
+    "sandwich", "plate", "cake", "spirits", "beverage", "order", "inventory", "stock",
+    "how much", "how many", "buckets", "oil", "water", "sold", "most requested",
+    "shake", "milk shake", "milkshake",
+]
 
-# ---------------- MODELS ----------------
-class RecipeModel(BaseModel):
-    dish_name: str
-    ingredients: List[str]
-    instructions: str
-    cooking_time: Optional[str] = None
-    difficulty: Optional[str] = None
+CATEGORY_GUESS = [
+    (r"pizza", "pizza"),
+    (r"burger|sandwich", "burger"),
+    (r"fries|chips", "fries"),
+    (r"juice|drink|beverage", "drink"),
+    (r"cake|dessert|pancake", "dessert"),
+]
 
-class InventoryAnalysis(BaseModel):
-    available: List[str]
-    missing: List[str]
-    low_stock: List[str]
-    summary: str
+# --------- I/O utilities ---------
 
-class OrderAnalysis(BaseModel):
-    dish_name: str
-    quantity: int
-    required_ingredients: List[Dict[str, Any]]
-    missing_ingredients: List[Dict[str, Any]]
-    low_stock_ingredients: List[Dict[str, Any]]
-    can_fulfill: bool
-    restock_recommendations: List[str]
+def log(*args: Any) -> None:
+    if DEBUG:
+        print("[assistant]", *args, file=sys.stderr)
 
-class LLMResponse(BaseModel):
-    answer: str
 
-# ---------------- SYSTEM PROMPT ----------------
-SYSTEM_PROMPT = dedent("""
-You are a professional restaurant AI assistant with access to the complete restaurant database.
-
-Rules:
-1. Answer questions related to ALL restaurant topics: recipes, dishes, drinks, ingredients, cooking methods, inventory, users, employees, orders, sales, profits, costs, and any other restaurant database data.
-2. If asked about a recipe or drink:
-   - ALWAYS provide the complete recipe first, regardless of ingredient availability.
-   - Include a full ingredients list with quantities and step-by-step cooking instructions.
-   - Make the recipe instructions clear and easy to follow.
-3. For inventory questions:
-   - ALWAYS include quantities for each ingredient mentioned.
-   - Show ONLY ingredients that are out of stock (0 units) or low in stock (1-2 units) when reporting issues.
-   - For general inventory queries, show all ingredients with their quantities.
-4. For database queries (users, orders, sales, profits, costs):
-   - Provide comprehensive information from the database.
-   - Include relevant statistics, summaries, and insights.
-   - Format data clearly and professionally.
-5. Format your response as:
-   - Main answer section
-   - Data/Statistics section (if applicable)
-   - Summary/recommendations
-6. Keep responses professional, clear, and well-structured. No emojis, no filler text.
-7. ALWAYS include quantities when discussing inventory items.
-""")
-
-# ---------------- UTILS ----------------
-def is_restaurant_query(text: str) -> bool:
-    keywords = [
-        "recipe", "ingredient", "cook", "prepare", "dish", "menu", "drink", "water",
-        "juice", "coffee", "tea", "inventory", "stock", "available", "burger", "pizza",
-        "pasta", "salad", "soup", "cake", "bread", "chicken", "beef", "fish", "rice", "fries",
-        "user", "employee", "order", "sale", "profit", "cost", "revenue", "statistic", "data",
-        "database", "report", "summary", "total", "count", "show", "list", "what", "how many"
-    ]
-    return any(word in text.lower() for word in keywords)
-
-def is_order_request(text: str) -> bool:
-    """
-    Detect if the user is asking about placing an order
-    """
-    order_keywords = [
-        "order", "customer order", "want to order", "need to make", "fulfill order",
-        "can we make", "do we have enough", "restock", "inventory check"
-    ]
-    return any(keyword in text.lower() for keyword in order_keywords)
-
-def extract_order_details(text: str) -> Optional[Dict[str, Any]]:
-    """
-    Extract order details from user text
-    Examples: "150 pizzas", "order 50 burgers", "customer wants 25 cakes"
-    """
-    try:
-        # Look for quantity patterns
-        quantity_patterns = [
-            r'(\d+)\s*(pizza|pizzas|burger|burgers|cake|cakes|dish|dishes|meal|meals)',
-            r'order\s+(\d+)\s*(pizza|pizzas|burger|burgers|cake|cakes|dish|dishes|meal|meals)',
-            r'(\d+)\s*(pizza|pizzas|burger|burgers|cake|cakes|dish|dishes|meal|meals)\s*order',
-            r'customer\s+(?:wants|ordered|needs)\s+(\d+)\s*(pizza|pizzas|burger|burgers|cake|cakes|dish|dishes|meal|meals)'
-        ]
-        
-        for pattern in quantity_patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                quantity = int(match.group(1))
-                item_type = match.group(2).lower()
-                
-                # Determine the specific dish name
-                if 'pizza' in item_type:
-                    dish_name = 'pizza'
-                elif 'burger' in item_type:
-                    dish_name = 'hamburger'
-                elif 'cake' in item_type:
-                    dish_name = 'cake'
-                else:
-                    dish_name = 'dish'
-                
-                return {
-                    'dish_name': dish_name,
-                    'quantity': quantity,
-                    'original_text': text
-                }
-        
+def find_item_in_database(items_col, dish: str) -> Optional[Dict[str, Any]]:
+    """Find item in MongoDB items collection by name (case-insensitive)"""
+    if not dish:
         return None
-        
-    except Exception as e:
-        print(f"Error extracting order details: {e}")
+    
+    # Try exact match first
+    doc = items_col.find_one({
+        "name": {"$regex": f"^\\s*{re.escape(dish)}\\s*$", "$options": "i"}
+    })
+    if doc:
+        return doc
+    
+    # Try fuzzy match
+    dish_normalized = normalize_title_for_match(dish)
+    for doc in items_col.find({}):
+        name = doc.get("name", "")
+        if normalize_title_for_match(name) == dish_normalized:
+            return doc
+    
+    return None
+
+
+# --------- MongoDB ---------
+
+def mongo() -> MongoClient:
+    if not MONGO_URI:
+        raise RuntimeError("MONGO_URI missing in environment")
+    return MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
+
+
+def get_collections(client: MongoClient):
+    db = client[MONGO_DB]
+    return db["ingredients"], db["items"]
+
+
+def fetch_inventory_map(ingredients_col) -> Dict[str, Dict[str, Any]]:
+    """Return a dict keyed by lowercased ingredient name.
+    Expected Ingredient docs to have at least: name, quantity, unit
+    """
+    inv = {}
+    for doc in ingredients_col.find({}):
+        name = (doc.get("name") or "").strip().lower()
+        if name:
+            inv[name] = doc
+    return inv
+
+
+def resolve_ingredient_object_id(ingredients_col, name: str) -> Optional[ObjectId]:
+    if not name:
         return None
+    n = name.strip().lower()
+    doc = ingredients_col.find_one({"name": {"$regex": f"^\\s*{re.escape(n)}\\s*$", "$options": "i"}})
+    return doc.get("_id") if doc else None
 
-def get_inventory() -> Dict[str, Any]:
-    try:
-        inventory = {}
-        for doc in db["ingredients"].find({}):
-            inventory[doc["name"].lower()] = doc.get("currentStock", 0)
-        return inventory
-    except Exception as e:
-        return {"error": f"Inventory fetch failed: {str(e)}"}
 
-def get_users() -> List[Dict]:
-    try:
-        users = list(db["users"].find({}, {"_id": 0, "password": 0}))  # Exclude password
-        return users
-    except Exception as e:
-        return [{"error": f"Users fetch failed: {str(e)}"}]
-
-def get_orders() -> List[Dict]:
-    try:
-        orders = list(db["orders"].find({}, {"_id": 0}))
-        return orders
-    except Exception as e:
-        return [{"error": f"Orders fetch failed: {str(e)}"}]
-
-def get_items() -> List[Dict]:
-    try:
-        items = list(db["items"].find({}, {"_id": 0}))
-        return items
-    except Exception as e:
-        return [{"error": f"Items fetch failed: {str(e)}"}]
-
-def get_daily_sales() -> List[Dict]:
-    try:
-        sales = list(db["dailysales"].find({}, {"_id": 0}))
-        return sales
-    except Exception as e:
-        return [{"error": f"Daily sales fetch failed: {str(e)}"}]
-
-def get_restaurant_stats() -> Dict:
-    """Get comprehensive restaurant statistics"""
-    try:
-        stats = {}
-        
-        # Count totals
-        stats["total_users"] = db["users"].count_documents({})
-        stats["total_orders"] = db["orders"].count_documents({})
-        stats["total_items"] = db["items"].count_documents({})
-        stats["total_ingredients"] = db["ingredients"].count_documents({})
-        
-        # Calculate total revenue from orders
-        orders = list(db["orders"].find({}, {"totalAmount": 1}))
-        total_revenue = sum(order.get("totalAmount", 0) for order in orders)
-        stats["total_revenue"] = total_revenue
-        
-        # Calculate total cost from ingredients
-        ingredients = list(db["ingredients"].find({}, {"currentStock": 1, "costPerUnit": 1}))
-        total_cost = sum(ing.get("currentStock", 0) * ing.get("costPerUnit", 0) for ing in ingredients)
-        stats["total_inventory_cost"] = total_cost
-        
-        # Calculate profit
-        stats["total_profit"] = total_revenue - total_cost
-        
-        # Get recent orders (last 10)
-        recent_orders = list(db["orders"].find({}, {"_id": 0, "orderDate": 1, "totalAmount": 1, "status": 1}).sort("orderDate", -1).limit(10))
-        stats["recent_orders"] = recent_orders
-        
-        return stats
-    except Exception as e:
-        return {"error": f"Statistics calculation failed: {str(e)}"}
-
-def find_closest(name: str, keys: List[str]) -> Optional[str]:
-    matches = get_close_matches(name.lower(), keys, n=1, cutoff=0.6)
-    return matches[0] if matches else None
-
-def analyze_inventory(ingredients: List[str], inventory: Dict[str, Any]) -> InventoryAnalysis:
-    available, missing, low_stock = [], [], []
-    for ing in ingredients:
-        closest = find_closest(ing, list(inventory.keys()))
-        if closest and inventory.get(closest, 0) > 0:
-            available.append(f"{closest} ({inventory[closest]})")
-            if inventory.get(closest, 0) <= 2:
-                low_stock.append(closest)
-        else:
-            missing.append(ing)
-    summary = (
-        "All ingredients available." if not missing else
-        f"Missing: {', '.join(missing)}"
-    )
-    return InventoryAnalysis(available=available, missing=missing, low_stock=low_stock, summary=summary)
-
-def analyze_order_fulfillment(dish_name: str, quantity: int, recipe_ingredients: List[str], inventory: Dict[str, int]) -> OrderAnalysis:
-    """
-    Analyze if an order can be fulfilled and provide restocking recommendations
-    """
-    required_ingredients = []
-    missing_ingredients = []
-    low_stock_ingredients = []
-    restock_recommendations = []
+def add_ingredients_to_inventory(ingredients_col, recipe_ingredients: List[Dict[str, Any]]) -> None:
+    """Add recipe ingredients to MongoDB ingredients collection"""
+    # Respect environment flag to avoid polluting inventory
+    if not AUTO_ADD_INGREDIENTS:
+        return
+    if not recipe_ingredients:
+        return
     
-    # Parse recipe ingredients and match with inventory
-    for ingredient_text in recipe_ingredients:
-        # Extract ingredient name and quantity from text like "2 cups flour" or "1 lb beef"
-        ingredient_info = parse_ingredient_text(ingredient_text)
-        if ingredient_info:
-            ingredient_name = ingredient_info['name']
-            base_quantity = ingredient_info['quantity']
-            unit = ingredient_info['unit']
-            
-            # Calculate total required quantity
-            total_required = base_quantity * quantity
-            
-            # Find matching ingredient in inventory
-            closest_match = find_closest(ingredient_name, list(inventory.keys()))
-            
-            if closest_match:
-                available_stock = inventory[closest_match]
-                required_ingredients.append({
-                    'name': closest_match,
-                    'required': total_required,
-                    'available': available_stock,
-                    'unit': unit,
-                    'status': 'available' if available_stock >= total_required else 'insufficient'
-                })
-                
-                if available_stock < total_required:
-                    missing_ingredients.append({
-                        'name': closest_match,
-                        'required': total_required,
-                        'available': available_stock,
-                        'unit': unit,
-                        'shortage': total_required - available_stock
-                    })
-                    restock_recommendations.append(f"Restock {closest_match}: Need {total_required} {unit}, have {available_stock} {unit}")
-                elif available_stock <= total_required * 0.2:  # Less than 20% buffer
-                    low_stock_ingredients.append({
-                        'name': closest_match,
-                        'required': total_required,
-                        'available': available_stock,
-                        'unit': unit
-                    })
-                    restock_recommendations.append(f"Low stock warning: {closest_match} - {available_stock} {unit} remaining")
-            else:
-                missing_ingredients.append({
-                    'name': ingredient_name,
-                    'required': total_required,
-                    'available': 0,
-                    'unit': unit,
-                    'shortage': total_required
-                })
-                restock_recommendations.append(f"Add {ingredient_name} to inventory: Need {total_required} {unit}")
-    
-    can_fulfill = len(missing_ingredients) == 0
-    
-    return OrderAnalysis(
-        dish_name=dish_name,
-        quantity=quantity,
-        required_ingredients=required_ingredients,
-        missing_ingredients=missing_ingredients,
-        low_stock_ingredients=low_stock_ingredients,
-        can_fulfill=can_fulfill,
-        restock_recommendations=restock_recommendations
-    )
-
-def parse_ingredient_text(ingredient_text: str) -> Optional[Dict[str, Any]]:
-    """
-    Parse ingredient text to extract name, quantity, and unit
-    Examples: "2 cups flour", "1 lb beef", "3 large eggs"
-    """
-    try:
-        # Remove extra whitespace
-        text = ingredient_text.strip()
-        
-        # Common quantity patterns
-        quantity_patterns = [
-            r'^(\d+(?:\.\d+)?)\s*(cup|cups|tbsp|tsp|oz|lb|g|kg|ml|l|piece|pieces|large|medium|small)\s+(.+)',
-            r'^(\d+(?:\.\d+)?)\s*(.+)',
-            r'^(\d+)\s*(.+)'
-        ]
-        
-        for pattern in quantity_patterns:
-            match = re.match(pattern, text, re.IGNORECASE)
-            if match:
-                quantity = float(match.group(1))
-                unit = match.group(2) if len(match.groups()) > 2 else 'unit'
-                name = match.group(3) if len(match.groups()) > 2 else match.group(2)
-                
-                # Clean up the name
-                name = re.sub(r'^(cup|cups|tbsp|tsp|oz|lb|g|kg|ml|l|piece|pieces|large|medium|small)\s+', '', name, flags=re.IGNORECASE)
-                
-                return {
-                    'name': name.strip(),
-                    'quantity': quantity,
-                    'unit': unit.lower()
-                }
-        
-        # If no pattern matches, assume it's just an ingredient name
-        return {
-            'name': text,
-            'quantity': 1,
-            'unit': 'unit'
-        }
-        
-    except Exception as e:
-        print(f"Error parsing ingredient text '{ingredient_text}': {e}")
-        return None
-
-def extract_ingredients_from_text(text: str) -> List[str]:
-    if not text:
-        return []
-    lines = re.split(r"\n|;|-|\u2022", text)
-    candidates = []
-    pattern = re.compile(
-        r"(?:(?:\d+\/\d+|\d+)\s*(?:g|kg|ml|l|cup|cups|tbsp|tsp|tablespoon|teaspoon|oz|ounce|lb|pound)?)\s*([A-Za-z][A-Za-z0-9\s\-,()]+)",
-        re.I
-    )
-    fallback_words = r"\b(salt|pepper|onion|garlic|tomato|cheese|egg|eggs|flour|water|oil|butter|milk|sugar|lemon|vinegar|rice|pasta|bun|buns)\b"
-    for ln in lines:
-        ln_clean = ln.strip()
-        if not ln_clean or len(ln_clean) < 3:
+    for ing in recipe_ingredients:
+        ing_name = str(ing.get("name", "")).strip()
+        if not ing_name:
             continue
-        m = pattern.search(ln_clean)
-        if m:
-            candidates.append(ln_clean)
-        elif re.search(fallback_words, ln_clean.lower()):
-            candidates.append(ln_clean)
-    seen = []
-    for c in candidates:
-        c_clean = re.sub(r"\s+", " ", c).strip()
-        if c_clean not in seen:
-            seen.append(c_clean)
-    return seen
+            
+        ing_unit = ing.get("unit", "unit")
+        # Normalize units to match Ingredient schema
+        if ing_unit == "scoops":
+            ing_unit = "unit"  # Convert scoops to unit
+        elif ing_unit == "tsp" or ing_unit == "tbsp":
+            ing_unit = "unit"  # Convert tsp/tbsp to unit
+        elif ing_unit not in {"g", "kg", "l", "ml", "piece", "unit"}:
+            ing_unit = "unit"
+        
+        # Check if ingredient already exists in MongoDB
+        existing_doc = ingredients_col.find_one({
+            "name": {"$regex": f"^\\s*{re.escape(ing_name)}\\s*$", "$options": "i"}
+        })
+        
+        if not existing_doc:
+            # Add to MongoDB ingredients collection
+            try:
+                ingredient_doc = {
+                    "name": ing_name,
+                    "unit": ing_unit,
+                    "currentStock": 0,  # Start with 0 stock
+                    "pricePerUnit": 0,
+                    "totalPurchasedQuantity": 0,
+                    "totalPurchasedAmount": 0,
+                    "lastPurchaseUnitPrice": 0,
+                    "alertThreshold": 10,  # Default alert threshold
+                }
+                ingredients_col.insert_one(ingredient_doc)
+                log(f"Added ingredient to MongoDB: {ing_name}")
+            except Exception as e:
+                log(f"Failed to add ingredient {ing_name} to MongoDB: {e}")
 
-# ---------------- WEB SEARCH ----------------
-def duckduckgo_search(query: str) -> Optional[str]:
+
+# --------- Domain helpers ---------
+
+def is_restaurant_related(query: str) -> bool:
+    q = query.lower()
+    return any(k in q for k in RESTAURANT_KEYWORDS)
+
+
+def normalize_name(s: str) -> str:
+    return re.sub(r"\s+", " ", s.strip()).lower()
+
+
+def normalize_title_for_match(s: str) -> str:
+    """Normalize names for fuzzy equality: lowercase and remove spaces/hyphens."""
+    return re.sub(r"[\s\-]+", "", (s or "").strip().lower())
+
+
+def guess_category(name: str) -> str:
+    n = name.lower()
+    for pat, cat in CATEGORY_GUESS:
+        if re.search(pat, n):
+            return cat
+    return "plate"  # default
+
+
+# --------- DuckDuckGo + Gemini recipe synthesis ---------
+
+def ddg_search_snippets(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    """Return list of {title, href, snippet}."""
+    results: List[Dict[str, str]] = []
+    if DDGS is None:
+        return results
     try:
-        resp = requests.get(
-            "https://api.duckduckgo.com/",
-            params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
-            timeout=10
-        )
-        data = resp.json()
-        if data.get("AbstractText"):
-            return data["AbstractText"]
-        if data.get("Abstract"):
-            return data["Abstract"]
-        if data.get("RelatedTopics"):
-            for t in data["RelatedTopics"]:
-                if isinstance(t, dict) and "Text" in t:
-                    return t["Text"]
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=max_results, region="wt-wt"):
+                results.append({
+                    "title": r.get("title") or "",
+                    "href": r.get("href") or "",
+                    "snippet": r.get("body") or r.get("snippet") or "",
+                })
     except Exception as e:
-        print(f"DuckDuckGo search error: {e}")
-    return None
+        log("DDG search error:", e)
+    return results
 
-def themealdb_search(dish: str) -> Optional[RecipeModel]:
+
+def init_gemini():
     try:
-        resp = requests.get(
-            "https://www.themealdb.com/api/json/v1/1/search.php",
-            params={"s": dish},
-            timeout=10
-        )
-        data = resp.json()
-        meals = data.get("meals")
-        if not meals:
+        if genai is None:
             return None
-        meal = meals[0]
-        ingredients = [
-            f"{meal[f'strMeasure{i}']} {meal[f'strIngredient{i}']}".strip()
-            for i in range(1, 21) if meal.get(f"strIngredient{i}")
-        ]
-        return RecipeModel(
-            dish_name=meal.get("strMeal", dish),
-            ingredients=ingredients,
-            instructions=meal.get("strInstructions", "")
-        )
-    except Exception as e:
-        print(f"TheMealDB error: {e}")
+        if not GOOGLE_API_KEY:
+            return None
+        getattr(genai, 'configure')(api_key=GOOGLE_API_KEY)
+        GenModel = getattr(genai, 'GenerativeModel', None)
+        if GenModel is None:
+            return None
+        return GenModel("gemini-1.5-pro")
+    except Exception:
         return None
 
-def get_recipe_from_web(dish: str) -> Optional[RecipeModel]:
-    recipe = themealdb_search(dish)
-    if recipe:
-        return recipe
-    web_text = duckduckgo_search(f"{dish} recipe ingredients")
-    if web_text:
-        return RecipeModel(dish_name=dish, ingredients=[], instructions=web_text)
-    return None
 
-# ---------------- FALLBACK RESPONSE GENERATOR ----------------
-def generate_fallback_response(user_text: str, web_recipe: Optional[RecipeModel], inventory: Dict[str, int], inv_analysis: Optional[InventoryAnalysis]) -> str:
-    """Generate a fallback response when AI service is unavailable"""
+GEMINI_SYSTEM = (
+    "You are a restaurant helper. You help restaurant workers with simple questions about "
+    "food, drinks, and ingredients. Use VERY SIMPLE words that any worker can understand. "
+    "Do NOT use fancy cooking terms or complicated ingredient names. For example, say "
+    "'ice cream' instead of 'vanilla extract', say 'mix' instead of 'blend', say 'cup' "
+    "instead of 'ml'. Keep recipes very simple with basic ingredients that a normal "
+    "restaurant would have. Make steps short and easy to follow. Always tell if the "
+    "restaurant has the ingredients or what is missing."
+)
+
+
+def gemini_compose_recipe_from_web(model, dish_name: str, web_snippets: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Ask Gemini to synthesize a clean recipe JSON from the web snippets.
+    Returns { name, category, instructions, steps, ingredients:[{name, quantity, unit}] }
+    """
+    prompt = {
+        "role": "user",
+        "parts": [
+            {
+                "text": (
+                    f"Synthesize a reliable recipe for '{dish_name}'.\n"
+                    "Use the following web snippets (titles, snippets, URLs) as references.\n"
+                    "Return STRICT JSON with keys: name (string), category (string),"
+                    " instructions (string), steps (string[]), ingredients (array of objects"
+                    " with name (string), quantity (number), unit (string from: g, kg, l,"
+                    " piece, unit)). If you don't know exact quantities from the snippets,"
+                    " infer common standard amounts. Keep steps short, 4-10 items."
+                )
+            },
+            {"text": json.dumps(web_snippets, ensure_ascii=False)}
+        ]
+    }
     
-    response_parts = []
-    
-    # Check if it's an inventory question
-    if any(word in user_text.lower() for word in ["inventory", "ingredients", "stock", "what do you have"]):
-        if inventory and not "error" in inventory:
-            response_parts.append("**Current Inventory (with quantities):**")
-            for item, quantity in inventory.items():
-                if quantity == 0:
-                    response_parts.append(f"- {item}: OUT OF STOCK")
-                elif quantity <= 2:
-                    response_parts.append(f"- {item}: LOW STOCK ({quantity})")
-                else:
-                    response_parts.append(f"- {item}: {quantity}")
-        else:
-            response_parts.append("Unable to fetch inventory data at this time.")
-    
-    # Check if it's a database question
-    elif any(word in user_text.lower() for word in ["users", "orders", "sales", "profit", "cost", "employees", "statistics"]):
+    try:
+        resp = model.generate_content([
+            {"role": "system", "parts": [{"text": GEMINI_SYSTEM}]},
+            prompt,
+        ])
+        # Extract JSON payload from response text
+        text = (resp.text or "").strip()
+        # Try plain JSON first
+        data = None
         try:
-            stats = get_restaurant_stats()
-            if "error" not in stats:
-                response_parts.append("**Restaurant Statistics:**")
-                response_parts.append(f"- Total Users: {stats.get('total_users', 0)}")
-                response_parts.append(f"- Total Orders: {stats.get('total_orders', 0)}")
-                response_parts.append(f"- Total Revenue: ${stats.get('total_revenue', 0):.2f}")
-                response_parts.append(f"- Total Profit: ${stats.get('total_profit', 0):.2f}")
-                response_parts.append(f"- Total Items: {stats.get('total_items', 0)}")
-                response_parts.append(f"- Total Ingredients: {stats.get('total_ingredients', 0)}")
-            else:
-                response_parts.append("Unable to fetch statistics at this time.")
-        except:
-            response_parts.append("Unable to fetch database information at this time.")
-    
-    # Add recipe if available and it's a recipe question
-    elif web_recipe and web_recipe.ingredients:
-        response_parts.append(f"**{web_recipe.dish_name.title()} Recipe**")
-        response_parts.append("\n**Ingredients:**")
-        for ingredient in web_recipe.ingredients:
-            response_parts.append(f"- {ingredient}")
-        
-        if web_recipe.instructions:
-            response_parts.append("\n**Instructions:**")
-            instructions = web_recipe.instructions.replace('\n\n', '\n').strip()
-            response_parts.append(instructions)
-    
-    # Add note about AI service
-    response_parts.append("\n*Note: AI service is temporarily unavailable. This response was generated from available data.*")
-    
-    return '\n'.join(response_parts)
+            data = json.loads(text)
+        except Exception:
+            # Try to find a JSON block
+            m = re.search(r"\{[\s\S]*\}$", text)
+            if m:
+                try:
+                    data = json.loads(m.group(0))
+                except Exception:
+                    pass
+        if not isinstance(data, dict):
+            raise RuntimeError("Gemini did not return valid JSON for recipe synthesis")
 
-# ---------------- MAIN LLM AGENT ----------------
-agent = Agent("google-gla:gemini-1.5-flash", system_prompt=SYSTEM_PROMPT)
+        # Normalize fields
+        data.setdefault("name", dish_name)
+        data.setdefault("category", guess_category(dish_name))
+        data.setdefault("instructions", "")
+        data.setdefault("steps", [])
+        data.setdefault("ingredients", [])
 
-async def handle_user_query(user_text: str) -> str:
-    if not is_restaurant_query(user_text):
-        return "I can only answer restaurant-related questions such as recipes, ingredients, and inventory."
+        # Coerce ingredients
+        clean_ings = []
+        for ing in data.get("ingredients", []) or []:
+            name = str(ing.get("name") or "").strip()
+            if not name:
+                continue
+            qty = ing.get("quantity")
+            try:
+                qty = float(qty) if qty is not None else 0.0
+            except Exception:
+                qty = 0.0
+            unit = (ing.get("unit") or "unit").strip()
+            if unit not in {"g", "kg", "l", "piece", "unit"}:
+                unit = "unit"
+            clean_ings.append({"name": name, "quantity": qty, "unit": unit})
+        data["ingredients"] = clean_ings
+        return data
+    except Exception:
+        # If Gemini fails, return fallback
+        raise RuntimeError("Failed to generate recipe from web snippets")
 
-    inventory = get_inventory()
-    if "error" in inventory:
-        return inventory["error"]
 
-    # Check if this is an order request
-    if is_order_request(user_text):
-        order_details = extract_order_details(user_text)
-        if order_details:
-            return await process_order_request(order_details, inventory)
-    
-    # Regular recipe/inventory query
-    dish_match = re.search(r"(?:recipe for|ingredients of|how to make)\s+([a-zA-Z\s]+)", user_text.lower())
-    dish_name = dish_match.group(1).strip() if dish_match else None
+# --------- Inventory cross-check ---------
 
-    web_recipe = None
-    inv_analysis = None
+def compare_with_inventory(recipe_ings: List[Dict[str, Any]], inventory_map: Dict[str, Dict[str, Any]]):
+    have_all = True
+    have_none = True
+    missing: List[str] = []
 
-    if dish_name:
-        web_recipe = get_recipe_from_web(dish_name)
-        if web_recipe:
-            if not web_recipe.ingredients and web_recipe.instructions:
-                web_recipe.ingredients = extract_ingredients_from_text(web_recipe.instructions)
-            if web_recipe.ingredients:
-                ing_names = [
-                    re.sub(r"\d+|\b(g|kg|ml|l|cup|cups|tbsp|tsp|tablespoon|teaspoon|oz|ounce|lb|pound)\b", "", ing, flags=re.I).strip()
-                    for ing in web_recipe.ingredients
-                ]
-                inv_analysis = analyze_inventory(ing_names, inventory)
-
-    # Fetch all relevant database data
-    users_data = get_users()
-    orders_data = get_orders()
-    items_data = get_items()
-    sales_data = get_daily_sales()
-    stats_data = get_restaurant_stats()
-    
-    context_prompt = dedent(f"""
-    User Query: {user_text}
-
-    Web Search Recipe: {safe_json_dumps(web_recipe.model_dump() if web_recipe else {}, indent=2)}
-
-    Inventory Data: {safe_json_dumps(inventory, indent=2)}
-
-    Inventory Analysis: {safe_json_dumps(inv_analysis.model_dump() if inv_analysis else {}, indent=2)}
-
-    Database Information:
-    - Users: {safe_json_dumps(users_data, indent=2)}
-    - Orders: {safe_json_dumps(orders_data, indent=2)}
-    - Menu Items: {safe_json_dumps(items_data, indent=2)}
-    - Daily Sales: {safe_json_dumps(sales_data, indent=2)}
-    - Restaurant Statistics: {safe_json_dumps(stats_data, indent=2)}
-
-    IMPORTANT: 
-    - For inventory questions: ALWAYS include quantities for each ingredient mentioned.
-    - For database questions: Provide comprehensive information from the database.
-    - For recipe questions: Always provide the complete recipe first, then include inventory status.
-    - Format responses professionally with clear sections.
-    - Include relevant statistics, summaries, and insights when appropriate.
-    """)
-
-    try:
-        # Debug logging (only in console, not in user response)
-        result = await agent.run(context_prompt, output_type=LLMResponse)
-        
-        # Clean the response for the user - remove any debug output
-        clean_response = result.output.answer.strip()
-        
-        # Remove debug lines if they somehow got into the response
-        lines = clean_response.split('\n')
-        filtered_lines = []
-        for line in lines:
-            if not any(debug_text in line.lower() for debug_text in [
-                'calling agent', 'agent response received', 'prompt length'
-            ]):
-                filtered_lines.append(line)
-        
-        return '\n'.join(filtered_lines)
-    except Exception as e:
-        print(f"Agent error: {str(e)}")
-        print(f"Error type: {type(e)}")
-        import traceback
-        traceback.print_exc()
-        
-        # Handle specific Google AI API errors gracefully
-        if "503" in str(e) or "UNAVAILABLE" in str(e):
-            # Provide fallback response using available data
-            fallback_response = generate_fallback_response(user_text, web_recipe, inventory, inv_analysis)
-            return fallback_response
-        elif "quota" in str(e).lower() or "limit" in str(e).lower():
-            return "The AI service has reached its usage limit. Please try again later or contact support."
+    for ing in recipe_ings:
+        n = normalize_name(ing.get("name", ""))
+        if not n:
+            continue
+        if n in inventory_map:
+            have_none = False
         else:
-            return f"Assistant error: {str(e)}"
+            have_all = False
+            missing.append(str(ing.get("name") or "").strip())
+    status = (
+        "all" if have_all else
+        ("none" if have_none else "some")
+    )
+    return status, missing
 
-async def process_order_request(order_details: Dict[str, Any], inventory: Dict[str, Any]) -> str:
+
+# --------- Persistence to DB ---------
+
+def save_item_to_mongo(items_col, ingredients_col, item: Dict[str, Any]) -> str:
+    """Save item into MongoDB 'items' collection following the Mongoose schema shape.
+    Returns inserted _id as string (or existing id if upserted).
     """
-    Process an order request and provide inventory analysis
-    """
+    if not AUTO_SAVE_ITEMS:
+        # Skip saving new items unless explicitly allowed
+        # Try to return existing id if present; otherwise, return empty string
+        name = item.get("name")
+        if name:
+            existing = items_col.find_one({"name": {"$regex": f"^\\s*{re.escape(name)}\\s*$", "$options": "i"}})
+            if existing:
+                return str(existing.get("_id"))
+        return ""
+    name = item.get("name")
+    if not name:
+        raise RuntimeError("Cannot save item without a name")
+
+    # Check if exists (case-insensitive exact)
+    existing = items_col.find_one({"name": {"$regex": f"^\\s*{re.escape(name)}\\s*$", "$options": "i"}})
+    if existing:
+        return str(existing.get("_id"))
+
+    # Map ingredients -> include ObjectId when resolvable
+    ing_docs = []
+    for ing in item.get("ingredients", []) or []:
+        ing_name = ing.get("name")
+        oid = resolve_ingredient_object_id(ingredients_col, ing_name)
+        ing_docs.append({
+            "ingredient": oid,  # may be None in Mongo, OK
+            "name": ing_name,
+            "quantity": float(ing.get("quantity") or 0.0),
+            "unit": ing.get("unit") or "unit",
+        })
+
+    doc = {
+        "name": name,
+        "description": item.get("description") or "",
+        "instructions": item.get("instructions") or "",
+        "price": float(item.get("price") or 0.0),
+        "category": item.get("category") or guess_category(name),
+        "ingredients": ing_docs,
+        "isAvailable": bool(item.get("isAvailable", True)),
+        "soldCount": int(item.get("soldCount", 0)),
+        "steps": [str(s) for s in (item.get("steps") or [])],
+    }
+
+    res = items_col.insert_one(doc)
+    return str(res.inserted_id)
+
+
+# --------- High-level flow ---------
+
+def make_fallback_recipe(dish_name: str) -> Dict[str, Any]:
+    name = dish_name.strip() or "Dish"
+    cat = guess_category(name)
+    # Minimal defaults
+    ingredients = [
+        {"name": "Main ingredient", "quantity": 1.0, "unit": "unit"},
+        {"name": "Seasoning", "quantity": 1.0, "unit": "unit"},
+        {"name": "Garnish", "quantity": 1.0, "unit": "unit"},
+    ]
+    steps = [
+        "Prepare ingredients",
+        "Cook appropriately",
+        "Assemble and plate",
+        "Serve",
+    ]
+    return {
+        "name": name,
+        "category": cat,
+        "ingredients": ingredients,
+        "steps": steps,
+        "instructions": "\n".join(steps),
+    }
+
+
+def handle_inventory_question(query: str, inventory_map: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    """Handle questions like 'how much water do I have' or 'oil buckets'."""
+    q = query.lower()
+    
+    # Only handle explicit inventory questions, not recipe requests
+    if not any(phrase in q for phrase in ["how much", "how many", "buckets", "quantity", "stock", "inventory"]):
+        return None
+
+    # extract a candidate noun (very rough heuristic)
+    m = re.search(r"how (?:much|many) ([a-zA-Z\s]+?) do i have|([a-zA-Z\s]+?) buckets|([a-zA-Z\s]+?) quantity", q)
+    cand = None
+    if m:
+        for g in m.groups():
+            if g:
+                cand = g.strip()
+                break
+    if not cand:
+        # fallback: look for known words like water, oil, sugar, flour...
+        for k in ["water", "oil", "flour", "sugar", "salt", "coffee", "tea", "milk", "eggs"]:
+            if k in q:
+                cand = k
+                break
+    if not cand:
+        return None
+
+    # find best match in inventory map (contains/startswith)
+    target = None
+    for name in inventory_map.keys():
+        if cand in name or name in cand:
+            target = name
+            break
+    if not target:
+        return f"I couldn't find '{cand}' in the inventory."
+
+    doc = inventory_map[target]
+    # Align with Mongoose schema: currentStock + unit
+    qty = doc.get("currentStock")
+    if qty is None:
+        qty = doc.get("quantity")  # fallback if legacy field exists
+    unit = (doc.get("unit") or "unit")
+    return f"Inventory: {doc.get('name')} — {qty} {unit}."
+
+
+def build_final_answer_with_gemini(model, user_query: str, recipe: Optional[Dict[str, Any]], inv_status: Tuple[str, List[str]], db_summary: Dict[str, Any]) -> str:
+    status, missing = inv_status
+    context_parts = []
+
+    if recipe:
+        context_parts.append({
+            "recipe": {
+                "name": recipe.get("name"),
+                "category": recipe.get("category"),
+                "ingredients": recipe.get("ingredients", []),
+                "steps": recipe.get("steps", []),
+                "instructions": recipe.get("instructions", "")
+            }
+        })
+
+    context_parts.append({
+        "inventory_check": {
+            "status": status,
+            "missing": missing,
+        }
+    })
+
+    context_parts.append({"db_summary": db_summary})
+
+    # If model unavailable, produce a plain formatted answer
+    if model is None:
+        lines_fallback: List[str] = []
+        if recipe:
+            lines_fallback.append(f"**{recipe.get('name', 'Recipe').title()}**")
+            lines_fallback.append("\n**Ingredients:**")
+            for ing in recipe.get('ingredients', []) or []:
+                nm = str(ing.get('name') or '').strip()
+                qty = ing.get('quantity')
+                try:
+                    qty = float(qty) if qty is not None else 0.0
+                except Exception:
+                    qty = 0.0
+                unit = str(ing.get('unit') or 'unit')
+                lines_fallback.append(f"- {qty} {unit} {nm}")
+            steps = recipe.get('steps') or []
+            if steps:
+                lines_fallback.append("\n**Steps:**")
+                for i, s in enumerate(steps, 1):
+                    lines_fallback.append(f"{i}. {s}")
+            instr = str(recipe.get('instructions') or '').strip()
+            if instr and not steps:
+                lines_fallback.append("\n**Instructions:**")
+                lines_fallback.append(instr)
+        lines_fallback.append("\n**Inventory status:**")
+        if status == 'all':
+            lines_fallback.append("All ingredients available.")
+        elif status == 'none':
+            lines_fallback.append("No required ingredients are currently in stock.")
+        else:
+            lines_fallback.append("Missing: " + ", ".join(missing))
+        return "\n".join(lines_fallback)
+
     try:
-        dish_name = order_details['dish_name']
-        quantity = order_details['quantity']
-        
-        # Get recipe from web
-        web_recipe = get_recipe_from_web(dish_name)
-        
-        if not web_recipe or not web_recipe.ingredients:
-            # Fallback to basic ingredient requirements
-            if dish_name == 'pizza':
-                basic_ingredients = [
-                    "2 cups flour", "1 cup water", "1 tsp yeast", "1 cup tomato sauce", 
-                    "2 cups cheese", "1 cup toppings"
-                ]
-            elif dish_name == 'hamburger':
-                basic_ingredients = [
-                    "1 lb ground beef", "4 burger buns", "1 cup lettuce", "1 cup tomatoes", 
-                    "1 cup onions", "1 cup cheese"
-                ]
-            elif dish_name == 'cake':
-                basic_ingredients = [
-                    "2 cups flour", "1 cup sugar", "1 cup milk", "3 eggs", 
-                    "1/2 cup butter", "1 tsp vanilla"
-                ]
-            else:
-                basic_ingredients = ["1 cup main ingredient", "1 cup seasoning", "1 cup garnish"]
-            
-            web_recipe = RecipeModel(
-                dish_name=dish_name,
-                ingredients=basic_ingredients,
-                instructions=f"Standard {dish_name} preparation method"
-            )
-        
-        # Analyze order fulfillment
-        order_analysis = analyze_order_fulfillment(
-            dish_name, quantity, web_recipe.ingredients, inventory
+        resp = model.generate_content([
+            {"role": "system", "parts": [{"text": GEMINI_SYSTEM}]},
+            {"role": "user", "parts": [
+                {"text": f"User question: {user_query}"},
+                {"text": "Context:"},
+                {"text": json.dumps(context_parts, ensure_ascii=False)}
+            ]}
+        ])
+        return (resp.text or "").strip()
+    except Exception:
+        # Graceful fallback: return the plain formatted answer
+        lines: List[str] = []
+        if recipe:
+            lines.append(f"**{recipe.get('name', 'Recipe').title()}**")
+            lines.append("\n**Ingredients:**")
+            for ing in recipe.get('ingredients', []) or []:
+                nm = str(ing.get('name') or '').strip()
+                qty = ing.get('quantity')
+                try:
+                    qty = float(qty) if qty is not None else 0.0
+                except Exception:
+                    qty = 0.0
+                unit = str(ing.get('unit') or 'unit')
+                lines.append(f"- {qty} {unit} {nm}")
+            steps = recipe.get('steps') or []
+            if steps:
+                lines.append("\n**Steps:**")
+                for i, s in enumerate(steps, 1):
+                    lines.append(f"{i}. {s}")
+            instr = str(recipe.get('instructions') or '').strip()
+            if instr and not steps:
+                lines.append("\n**Instructions:**")
+                lines.append(instr)
+        lines.append("\n**Inventory status:**")
+        if status == 'all':
+            lines.append("All ingredients available.")
+        elif status == 'none':
+            lines.append("No required ingredients are currently in stock.")
+        else:
+            lines.append("Missing: " + ", ".join(missing))
+        return "\n".join(lines)
+
+
+def summarize_db_state(items_col) -> Dict[str, Any]:
+    try:
+        total_items = items_col.count_documents({})
+        top = items_col.find({}).sort("soldCount", -1).limit(5)
+        top_names = [d.get("name") for d in top]
+        return {"total_items": total_items, "top_sold": top_names}
+    except Exception:
+        return {"total_items": None, "top_sold": []}
+
+
+def main(user_query: str) -> str:
+    if not is_restaurant_related(user_query):
+        return (
+            "I can help only with restaurant topics: menu items, recipes, ingredients, "
+            "inventory quantities, or popular dishes. Try asking about a dish, how to "
+            "prepare it, or what we have in stock."
         )
-        
-        # Build response
-        response_parts = []
-        
-        # Header
-        response_parts.append(f"**ORDER ANALYSIS: {quantity}x {dish_name.title()}**")
-        response_parts.append("=" * 50)
-        
-        # Recipe information
-        response_parts.append(f"\n**Recipe Ingredients (per {dish_name}):**")
-        for ingredient in web_recipe.ingredients:
-            response_parts.append(f"  • {ingredient}")
-        
-        # Inventory analysis
-        response_parts.append(f"\n**Inventory Analysis for {quantity}x {dish_name}:**")
-        
-        if order_analysis.can_fulfill:
-            response_parts.append("**ORDER CAN BE FULFILLED!**")
-            
-            if order_analysis.low_stock_ingredients:
-                response_parts.append("\n**Low Stock Warnings:**")
-                for ingredient in order_analysis.low_stock_ingredients:
-                    response_parts.append(f"  • {ingredient['name']}: {ingredient['available']} {ingredient['unit']} remaining")
-        else:
-            response_parts.append("**ORDER CANNOT BE FULFILLED**")
-            
-            response_parts.append("\n**Missing/Insufficient Ingredients:**")
-            for ingredient in order_analysis.missing_ingredients:
-                response_parts.append(f"  • {ingredient['name']}: Need {ingredient['required']} {ingredient['unit']}, have {ingredient['available']} {ingredient['unit']}")
-        
-        # Restocking recommendations
-        if order_analysis.restock_recommendations:
-            response_parts.append(f"\n**Restocking Recommendations:**")
-            for rec in order_analysis.restock_recommendations:
-                response_parts.append(f"  • {rec}")
-        
-        # Current inventory status
-        response_parts.append(f"\n**Current Inventory Status:**")
-        for ingredient_name, stock in inventory.items():
-            if stock <= 5:  # Show low stock items
-                response_parts.append(f"  • {ingredient_name}: {stock} units (LOW STOCK)")
-        
-        # Action items
-        response_parts.append(f"\n**Next Steps:**")
-        if order_analysis.can_fulfill:
-            response_parts.append("1. Proceed with order fulfillment")
-            if order_analysis.low_stock_ingredients:
-                response_parts.append("2. Plan restocking for low stock items")
-        else:
-            response_parts.append("1. Order cannot be fulfilled")
-            response_parts.append("2. Restock missing ingredients")
-            response_parts.append("3. Re-evaluate after restocking")
-        
-        return '\n'.join(response_parts)
-        
-    except Exception as e:
-        return f"Error processing order request: {str(e)}"
 
-# ---------------- ENTRY POINT ----------------
+    # Init services
+    # Connect to DB first to fail fast if misconfigured
+    client = mongo()
+    # Force a ping to verify connectivity
+    try:
+        client.admin.command('ping')
+    except Exception as e:
+        raise RuntimeError(f"MongoDB connection failed: {e}")
+
+    ingredients_col, items_col = get_collections(client)
+    model = init_gemini()
+    inventory_map = fetch_inventory_map(ingredients_col)
+
+    # Pure inventory question?
+    inv_reply = handle_inventory_question(user_query, inventory_map)
+    if inv_reply:
+        # Edge case: still let Gemini stylize the response
+        return build_final_answer_with_gemini(
+            model,
+            user_query,
+            None,
+            ("n/a", []),
+            summarize_db_state(items_col)
+        ) + f"\n\n{inv_reply}"
+
+    # Try to detect a dish/recipe name (heuristic: look for 'for <dish>' / 'of <dish>' / trailing subject)
+    def find_dish_name_from_query(q: str) -> Optional[str]:
+        ql = q.lower()
+        # common patterns
+        m = re.search(r"ingredients of ([a-zA-Z\s]+)", ql) or re.search(r"recipe for ([a-zA-Z\s]+)", ql)
+        if m:
+            return m.group(1).strip()
+        # last resort: pick the last wordish phrase
+        m = re.search(r"(?:make|prepare|cook|bake) ([a-zA-Z\s]+)$", ql)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    dish = find_dish_name_from_query(user_query) or user_query.strip()
+
+    # 1) If dish exists in database -> return it directly
+    found = find_item_in_database(items_col, dish)
+    if found:
+        # Build a recipe object compatible with our structure
+        recipe = {
+            "name": found.get("name"),
+            "category": found.get("category") or guess_category(found.get("name", "")),
+            "instructions": found.get("instructions") or ("\n".join(found.get("steps") or [])),
+            "steps": found.get("steps") or [],
+            # MongoDB stores ingredients as objects with name, quantity, unit
+            "ingredients": []
+        }
+        # Convert MongoDB ingredient docs to structured {name, quantity, unit}
+        structured_ings = []
+        for ing in found.get("ingredients", []) or []:
+            if isinstance(ing, dict):
+                nm = ing.get("name") or ing.get("ingredient") or ""
+                structured_ings.append({
+                    "name": nm,
+                    "quantity": float(ing.get("quantity") or 0.0),
+                    "unit": ing.get("unit") or "unit",
+                })
+            else:
+                structured_ings.append({"name": str(ing), "quantity": 0.0, "unit": "unit"})
+        recipe["ingredients"] = structured_ings
+
+        # Add recipe ingredients to inventory.json and MongoDB
+        add_ingredients_to_inventory(ingredients_col, recipe["ingredients"])
+
+        status = compare_with_inventory(recipe["ingredients"], inventory_map)
+        return build_final_answer_with_gemini(
+            model,
+            user_query,
+            recipe,
+            status,
+            summarize_db_state(items_col)
+        )
+
+    # 2) Not found in database -> Web search + Gemini synthesis (or fallback)
+    ddg_snippets = ddg_search_snippets(f"{dish} recipe ingredients steps") or []
+    if model is not None:
+        try:
+            recipe = gemini_compose_recipe_from_web(model, dish, ddg_snippets)
+        except Exception:
+            recipe = make_fallback_recipe(dish)
+    else:
+        recipe = make_fallback_recipe(dish)
+
+    # Save to MongoDB (best-effort)
+    try:
+        save_item_to_mongo(items_col, ingredients_col, recipe)
+    except Exception as _e:
+        log("Mongo save item failed:", _e)
+
+    # Add recipe ingredients to MongoDB
+    add_ingredients_to_inventory(ingredients_col, recipe.get("ingredients", []))
+
+    # Inventory check
+    status = compare_with_inventory(recipe.get("ingredients", []), inventory_map)
+
+    # Final answer via Gemini
+    return build_final_answer_with_gemini(
+        model,
+        user_query,
+        recipe,
+        status,
+        summarize_db_state(items_col)
+    )
+
+
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python assistant.py 'your query'")
-        sys.exit(1)
-    query = sys.argv[1]
-    answer = asyncio.run(handle_user_query(query))
-    print(answer)
-    
+    try:
+        # Default: treat argument as a user question
+        if len(sys.argv) < 2:
+            print("Please provide a user question as a single argument.")
+            sys.exit(1)
+        query = sys.argv[1].strip()
+        reply = main(query)
+        print(reply)
+    except Exception as e:
+        if DEBUG:
+            traceback.print_exc()
+        print("Sorry, something went wrong while generating the answer.")
+        sys.exit(0)
