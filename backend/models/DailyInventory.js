@@ -19,6 +19,8 @@ const dailyInventorySchema = new mongoose.Schema(
     date: { type: Date, required: true, index: true },
     ingredients: [dailyIngredientSchema],
     finalized: { type: Boolean, default: false },
+    openTime: { type: Date, default: null },
+    closeTime: { type: Date, default: null },
   },
   { timestamps: true }
 );

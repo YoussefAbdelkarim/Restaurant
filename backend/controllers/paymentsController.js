@@ -118,7 +118,7 @@ const createPayment = async (req, res) => {
 
         // Update stocks for each ingredient (add quantities) and update analytics
         for (const line of enriched) {
-          await Ingredient.findByIdAndUpdate(
+          const updated = await Ingredient.findByIdAndUpdate(
             line.ingredient,
             {
               $inc: {
@@ -129,6 +129,7 @@ const createPayment = async (req, res) => {
               $set: {
                 lastPurchaseUnitPrice: line.unitPrice,
                 pricePerUnit: line.unitPrice,
+                isManuallyOutOfStock: false,
               }
             },
             { new: true }
