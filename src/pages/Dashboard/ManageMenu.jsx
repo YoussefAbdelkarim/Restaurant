@@ -1,5 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import './ManageMenu.css';
 
@@ -16,6 +17,7 @@ const categoryImages = {
 const categories = ['pizza', 'burger', 'fries', 'drink', 'dessert', 'other', 'plate', 'sandwich'];
 
 export default function ManageMenu() {
+  const navigate = useNavigate();
   const [menu, setMenu] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -164,7 +166,12 @@ export default function ManageMenu() {
     <div className="manage-menu-container">
       <div className="top-bar">
         <h2 className="manage-menu-title">Manage Restaurant Menu</h2>
-        {/* Add Item button removed; use Create Item page */}
+        <button
+          className="add-item-btn"
+          onClick={() => navigate('/AdminDashboard/menu/create')}
+        >
+          Create dish
+        </button>
       </div>
 
       {Object.entries(groupedByCategory).map(([category, items]) => (

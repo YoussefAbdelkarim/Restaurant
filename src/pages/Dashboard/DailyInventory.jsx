@@ -4,8 +4,6 @@ export default function DailyInventory() {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0,10));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [openTime, setOpenTime] = useState('');
-  const [closeTime, setCloseTime] = useState('');
 
   const fetchDaily = async () => {
     try {
@@ -17,8 +15,6 @@ export default function DailyInventory() {
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
       const json = await res.json();
       setData(json);
-      if (json.openTime) setOpenTime(new Date(json.openTime).toISOString().slice(11,16));
-      if (json.closeTime) setCloseTime(new Date(json.closeTime).toISOString().slice(11,16));
     } catch (e) {
       alert(e.message);
     } finally {
@@ -31,63 +27,21 @@ export default function DailyInventory() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
-  const openDay = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch('/api/inventory/open', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ date, time: combineDateTime(date, openTime) })
-      });
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      fetchDaily();
-    } catch (e) { alert(e.message); }
-  };
-
-  const closeDay = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch('/api/inventory/close', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ date, time: combineDateTime(date, closeTime) })
-      });
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      const json = await res.json();
-      setData(json);
-    } catch (e) { alert(e.message); }
-  };
-
-  const combineDateTime = (dStr, tStr) => {
-    try {
-      if (!tStr) return new Date(dStr);
-      const [hh, mm] = tStr.split(':');
-      const d = new Date(dStr);
-      d.setHours(Number(hh || 0), Number(mm || 0), 0, 0);
-      return d;
-    } catch { return new Date(dStr); }
-  };
+  // Day start/end is fixed at 2:00 AM; no manual time inputs needed
 
   return (
     <div className="container mt-4">
       <div className="d-flex justify-content-between align-items-center mb-3">
-        <h3 className="mb-0">Daily Inventory</h3>
+        <div>
+          <h3 className="mb-0">Daily Inventory</h3>
+          <div className="text-muted small">The day starts/ends at 2:00 AM.</div>
+        </div>
         <div className="d-flex align-items-center gap-2 flex-wrap">
           <div className="d-flex align-items-center gap-2">
             <label className="mb-0">Date</label>
             <input type="date" value={date} onChange={e => setDate(e.target.value)} />
           </div>
-          <div className="d-flex align-items-center gap-2">
-            <label className="mb-0">Open</label>
-            <input type="time" value={openTime} onChange={e => setOpenTime(e.target.value)} />
-          </div>
-          <div className="d-flex align-items-center gap-2">
-            <label className="mb-0">Close</label>
-            <input type="time" value={closeTime} onChange={e => setCloseTime(e.target.value)} />
-          </div>
           <button className="btn btn-outline-primary" onClick={fetchDaily} disabled={loading}>Refresh</button>
-          <button className="btn btn-success" onClick={openDay} disabled={loading}>Open Day</button>
-          <button className="btn btn-warning" onClick={closeDay} disabled={loading}>Close Day</button>
         </div>
       </div>
 

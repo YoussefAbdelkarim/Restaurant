@@ -59,7 +59,6 @@ export const dummyInventory = [
     name: 'Pizza Dough',
     stock: 20,
     threshold: 5,
-    expiryDate: '2025-08-20',
     supplier: 'ABC Foods'
   },
   {
@@ -67,7 +66,6 @@ export const dummyInventory = [
     name: 'Tomato Sauce',
     stock: 8,
     threshold: 10,
-    expiryDate: '2025-08-18',
     supplier: 'Tomato Co.'
   },
   {
@@ -75,7 +73,6 @@ export const dummyInventory = [
     name: 'Cheese',
     stock: 3,
     threshold: 5,
-    expiryDate: '2025-08-17',
     supplier: 'Dairy Best'
   },
   {
@@ -83,7 +80,6 @@ export const dummyInventory = [
     name: 'Burger Patties',
     stock: 15,
     threshold: 5,
-    expiryDate: '2025-08-19',
     supplier: 'Meat Supplier Inc.'
   },
   {
@@ -91,7 +87,6 @@ export const dummyInventory = [
     name: 'Lettuce',
     stock: 2,
     threshold: 5,
-    expiryDate: '2025-08-15',
     supplier: 'Fresh Greens'
   },
   {
@@ -99,7 +94,6 @@ export const dummyInventory = [
     name: 'Coke Bottles',
     stock: 25,
     threshold: 10,
-    expiryDate: '2026-01-01',
     supplier: 'Beverage Corp.'
   },
   {
@@ -107,7 +101,6 @@ export const dummyInventory = [
     name: 'Fries',
     stock: 12,
     threshold: 5,
-    expiryDate: '2025-08-22',
     supplier: 'Potato World'
   },
   {
@@ -115,7 +108,6 @@ export const dummyInventory = [
     name: 'Pasta',
     stock: 18,
     threshold: 7,
-    expiryDate: '2025-12-31',
     supplier: 'Italian Foods Ltd.'
   }
 ];
