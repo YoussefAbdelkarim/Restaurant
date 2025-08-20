@@ -230,14 +230,17 @@ export default function InventoryDashboard() {
         alert('Authentication required. Please login again.');
         return;
       }
-      const endpoint = `/api/ingredients/${id}`;
-      const response = await fetch(endpoint, {
-        method: 'PUT',
+      // Use stock endpoint to record a dispose transaction for the delta to 0
+      const current = ingredients.find(it => it._id === id);
+      const qty = Number(current?.currentStock || 0);
+      if (!qty) return; // nothing to do
+      const response = await fetch(`/api/ingredients/${id}/stock`, {
+        method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ currentStock: 0 })
+        body: JSON.stringify({ quantity: qty, operation: 'subtract' })
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));

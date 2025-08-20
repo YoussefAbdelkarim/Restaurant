@@ -80,7 +80,26 @@ const updateIngredientStock = async (req, res) => {
     }
 
     ingredient.currentStock = newStock;
+    if (operation === 'add') ingredient.isManuallyOutOfStock = false;
     await ingredient.save();
+
+    // Record inventory transaction for manual stock changes
+    try {
+      const InventoryTransaction = require('../models/InventoryTransaction');
+      const tx = {
+        ingredient: ingredient._id,
+        quantity: Number(quantity),
+        operation: operation === 'add' ? 'add' : 'subtract',
+        kind: operation === 'add' ? 'adjustment' : 'dispose',
+        unitPrice: Number(ingredient.pricePerUnit || 0),
+        amount: Number(ingredient.pricePerUnit || 0) * Number(quantity || 0),
+        date: new Date(),
+        notes: operation === 'add' ? 'Manual add via Inventory page' : 'Manual dispose via Inventory page',
+      };
+      await InventoryTransaction.create(tx);
+    } catch (e) {
+      // non-fatal
+    }
 
     res.json(ingredient);
   } catch (err) {

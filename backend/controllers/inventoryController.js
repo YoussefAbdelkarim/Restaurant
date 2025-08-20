@@ -15,8 +15,15 @@ async function buildDailyFromNow(date) {
   const ingredients = await Ingredient.find();
 
   // Aggregate transactions for the day by ingredient
+  // Narrow by open/close time if present
+  let daily = await DailyInventory.findOne({ date: start });
+  let from = start;
+  let to = end;
+  if (daily && daily.openTime) from = daily.openTime;
+  if (daily && daily.closeTime) to = daily.closeTime;
+
   const txs = await InventoryTransaction.aggregate([
-    { $match: { date: { $gte: start, $lt: end } } },
+    { $match: { date: { $gte: from, $lt: to } } },
     { $group: {
       _id: '$ingredient',
       purchaseQty: { $sum: { $cond: [{ $eq: ['$kind', 'purchase'] }, '$quantity', 0] } },
@@ -28,7 +35,7 @@ async function buildDailyFromNow(date) {
   const idToAgg = new Map(txs.map(t => [String(t._id), t]));
 
   // Try to find an existing daily record
-  let daily = await DailyInventory.findOne({ date: start });
+  daily = await DailyInventory.findOne({ date: start });
   const ingredientMap = new Map();
   if (daily) {
     for (const di of daily.ingredients) {
@@ -60,7 +67,7 @@ async function buildDailyFromNow(date) {
   }
 
   if (!daily) {
-    daily = await DailyInventory.create({ date: start, ingredients: merged, finalized: false });
+    daily = await DailyInventory.create({ date: start, ingredients: merged, finalized: false, openTime: null, closeTime: null });
   } else {
     daily.ingredients = merged;
     await daily.save();
@@ -73,8 +80,11 @@ async function buildDailyFromNow(date) {
 const openDay = async (req, res) => {
   try {
     const date = normalizeDate(req.body?.date);
+    const at = req.body?.time ? new Date(req.body.time) : new Date();
     let daily = await DailyInventory.findOne({ date });
     if (daily && daily.ingredients?.length) {
+      if (!daily.openTime) daily.openTime = at;
+      await daily.save();
       return res.json(daily);
     }
     const ingredients = await Ingredient.find();
@@ -90,7 +100,7 @@ const openDay = async (req, res) => {
     }));
     daily = await DailyInventory.findOneAndUpdate(
       { date },
-      { $set: { date, ingredients: entries, finalized: false } },
+      { $set: { date, ingredients: entries, finalized: false, openTime: at, closeTime: null } },
       { new: true, upsert: true }
     );
     return res.json(daily);
@@ -103,6 +113,7 @@ const openDay = async (req, res) => {
 const closeDay = async (req, res) => {
   try {
     const date = normalizeDate(req.body?.date);
+    const at = req.body?.time ? new Date(req.body.time) : new Date();
     const start = date;
     const end = new Date(start);
     end.setDate(end.getDate() + 1);
@@ -113,6 +124,8 @@ const closeDay = async (req, res) => {
     }
 
     // Rebuild daily based on current state and transactions, then mark finalized
+    daily.closeTime = at;
+    await daily.save();
     const rebuilt = await buildDailyFromNow(start);
     rebuilt.finalized = true;
     await rebuilt.save();
@@ -160,8 +173,23 @@ const disposeIngredient = async (req, res) => {
 const getDaily = async (req, res) => {
   try {
     const date = normalizeDate(req.query?.date);
+    const start = date;
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+
     const daily = await buildDailyFromNow(date);
-    return res.json(daily);
+
+    // Also return raw transactions for the day grouped by kind for UI drilldown
+    const txs = await InventoryTransaction.find({ date: { $gte: start, $lt: end } })
+      .populate('ingredient', 'name unit')
+      .sort({ date: 1 })
+      .lean();
+    const purchases = txs.filter(t => t.kind === 'purchase');
+    const disposals = txs.filter(t => t.kind === 'dispose');
+    const usages = txs.filter(t => t.kind === 'usage');
+    const adjustments = txs.filter(t => t.kind === 'adjustment');
+
+    return res.json({ ...daily.toObject(), transactions: { purchases, disposals, usages, adjustments } });
   } catch (err) {
     return res.status(500).json({ message: 'Server error', error: err.message });
   }

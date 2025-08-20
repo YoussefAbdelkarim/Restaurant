@@ -9,7 +9,6 @@ export default function Payments() {
   const [typeFilter, setTypeFilter] = useState("All");
   const [dateFilter, setDateFilter] = useState("");
   const [searchName, setSearchName] = useState("");
-  const [searchClicked, setSearchClicked] = useState(false);
 
   const navigate = useNavigate();
 
@@ -86,7 +85,7 @@ export default function Payments() {
       const paymentDate = new Date(p.date).toISOString().split('T')[0];
       if (paymentDate !== dateFilter) return false;
     }
-    if (searchClicked && searchName) {
+    if (searchName) {
       if (p.type === "salary" && !p.employeeName?.toLowerCase().includes(searchName.toLowerCase())) return false;
       if (p.type === "purchase") {
         if (p.ingredients && p.ingredients.length) {
@@ -98,7 +97,7 @@ export default function Payments() {
       }
     }
     return true;
-  });
+  });  
 
   // Calculate totals
   const totalSalary = filteredPayments
@@ -174,8 +173,7 @@ export default function Payments() {
             onChange={(e) => setSearchName(e.target.value)}
             style={{ width: "200px" }}
           />
-          <Button onClick={() => setSearchClicked(true)} variant="primary">Search</Button>
-          <Button onClick={() => { setSearchName(""); setSearchClicked(false); }} variant="secondary">Clear</Button>
+          <Button onClick={() => setSearchName("")} variant="secondary">Clear</Button>
         </div>
       </div>
 
