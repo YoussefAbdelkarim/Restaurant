@@ -407,11 +407,7 @@ class InventoryService {
    * @param {string} dishName - Name of the dish
    * @param {Array} requirements - Array of ingredient requirements
    */
-  static addDishRequirements(dishName, requirements) {
-    // This method can be used to dynamically add dish requirements
-    // For now, we'll keep it simple with predefined requirements
-    console.log(`Adding requirements for ${dishName}:`, requirements);
-  }
+  static addDishRequirements(dishName, requirements) {}
 }
 
 module.exports = InventoryService;

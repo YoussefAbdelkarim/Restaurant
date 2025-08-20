@@ -11,7 +11,6 @@ import About from './pages/About/About';
 import Contact from './pages/Contact/Contact';
 import AdminLogin from './pages/Login/login';
 import AdminDashboard from './pages/Dashboard/AdminDashboard';
-import AssistantComponent from './components/AssistantComponent/AssistantComponent';
 
 function App() {
   const location = useLocation();
