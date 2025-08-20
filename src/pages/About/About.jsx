@@ -31,7 +31,11 @@ function About() {
             transition={{ duration: 1 }}
           >
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
             <p>Welcome to Flavor Hub in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
+=======
+            <p>Welcome to Flavor Hub  Restaurant in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
+>>>>>>> Stashed changes
 =======
             <p>Welcome to Flavor Hub  Restaurant in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
 >>>>>>> Stashed changes
