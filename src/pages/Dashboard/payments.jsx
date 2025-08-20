@@ -186,7 +186,7 @@ export default function Payments() {
             <th>Details</th>
             <th>Amount</th>
             <th>Date</th>
-            <th>Actions</th>
+           
           </tr>
         </thead>
         <tbody>
@@ -221,20 +221,7 @@ export default function Payments() {
                 </td>
                 <td>${p.amount}</td>
                 <td>{new Date(p.date).toLocaleDateString()}</td>
-                <td>
-                  <div className="d-flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={() => handleDeletePayment(p._id)}
-                      className="d-flex align-items-center gap-1"
-                      title="Delete Payment"
-                    >
-                      <i className="fas fa-trash"></i>
-                      <span className="d-none d-sm-inline">Delete</span>
-                    </Button>
-                  </div>
-                </td>
+                
               </tr>
             ))
           ) : (

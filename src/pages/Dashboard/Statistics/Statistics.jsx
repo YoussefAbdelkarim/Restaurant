@@ -1,25 +1,60 @@
-import React from "react";
+import React, { useRef, useState, useMemo } from "react";
+import { Line } from "react-chartjs-2";
 import {
   PieChart,
   Pie,
   Cell,
-  Tooltip,
-  Legend,
+  Tooltip as ReTooltip,
+  Legend as ReLegend,
   ResponsiveContainer,
-  LineChart,
-  Line,
+  BarChart,
+  Bar,
   CartesianGrid,
   XAxis,
   YAxis,
-  BarChart,
-  Bar,
-  RadialBarChart,
-  RadialBar,
 } from "recharts";
+import jsPDF from "jspdf";
+import moment from "moment";
 import KpiCard from "./KpiCard";
 
-const COLORS = ["#FF6B6B", "#4ECDC4", "#FFD93D", "#6A4C93"];
+// Chart.js imports
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+} from "chart.js";
 
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend
+);
+
+// Fake data (replace with real API/orders data)
+const orders = [
+  { date: "2025-08-01", totalPrice: 200 },
+  { date: "2025-08-02", totalPrice: 350 },
+  { date: "2025-08-03", totalPrice: 400 },
+  { date: "2025-08-04", totalPrice: 220 },
+  { date: "2025-08-05", totalPrice: 500 },
+  { date: "2025-08-06", totalPrice: 300 },
+  { date: "2025-08-07", totalPrice: 450 },
+];
+
+const COLORS = ["#FF6B6B", "#4ECDC4", "#FFD93D", "#6A4C93"];
 const dataBestSelling = [
   { name: "Pizza", value: 450 },
   { name: "Burger", value: 300 },
@@ -37,25 +72,121 @@ const ordersPerDay = [
   { day: "Sun", orders: 150 },
 ];
 
-const newVsReturning = [
-  { name: "New", value: 400 },
-  { name: "Returning", value: 600 },
-];
+const glowStyle = {
+  animation: "pulseGlow 2s infinite",
+  borderRadius: "20px",
+};
 
-const ratingsOverTime = [
-  { month: "Jan", rating: 4.2 },
-  { month: "Feb", rating: 4.5 },
-  { month: "Mar", rating: 4.1 },
-  { month: "Apr", rating: 4.7 },
-];
-
-const couponUsage = [
-  { name: "Summer20", uses: 120 },
-  { name: "WELCOME10", uses: 80 },
-  { name: "VIP50", uses: 40 },
-];
+const styles = `
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 10px rgba(33, 150, 243, 0.6), 0 0 20px rgba(33, 150, 243, 0.4); }
+  50% { box-shadow: 0 0 20px rgba(33, 150, 243, 0.9), 0 0 40px rgba(33, 150, 243, 0.6); }
+  100% { box-shadow: 0 0 10px rgba(33, 150, 243, 0.6), 0 0 20px rgba(33, 150, 243, 0.4); }
+}
+`;
 
 const Statistics = () => {
+  const lineChartRef = useRef();
+  const [period, setPeriod] = useState("daily");
+  const [selectedDate, setSelectedDate] = useState(moment().format("YYYY-MM-DD"));
+
+  // --- Sales Aggregation ---
+  const salesDataByPeriod = useMemo(() => {
+    const result = {};
+    orders.forEach((order) => {
+      let key;
+      if (period === "daily") {
+        key = moment(order.date).format("YYYY-MM-DD");
+        if (selectedDate && key !== selectedDate) return;
+      } else if (period === "weekly") {
+        key = moment(order.date).startOf("week").format("YYYY-[W]WW");
+      } else {
+        key = moment(order.date).format("YYYY-MM");
+      }
+      result[key] = (result[key] || 0) + order.totalPrice;
+    });
+    return result;
+  }, [orders, period, selectedDate]);
+
+  const salesLabels = Object.keys(salesDataByPeriod);
+  const salesValues = Object.values(salesDataByPeriod);
+
+  // --- Revenue Forecast ---
+  const forecastData = useMemo(() => {
+    const n = salesLabels.length;
+    if (n < 2) return { labels: [], values: [] };
+
+    const x = salesLabels.map((_, i) => i + 1);
+    const y = salesValues;
+    const sumX = x.reduce((a, b) => a + b, 0);
+    const sumY = y.reduce((a, b) => a + b, 0);
+    const sumXY = x.reduce((acc, xi, idx) => acc + xi * y[idx], 0);
+    const sumX2 = x.reduce((acc, xi) => acc + xi * xi, 0);
+    const a = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+    const b = (sumY - a * sumX) / n;
+
+    const forecastLabels = [];
+    const forecastValues = [];
+    for (let i = 1; i <= 7; i++) {
+      const nextX = n + i;
+      const nextDate =
+        period === "daily"
+          ? moment(selectedDate).add(i, "days").format("YYYY-MM-DD")
+          : period === "weekly"
+          ? moment(salesLabels[salesLabels.length - 1])
+              .add(i, "week")
+              .startOf("week")
+              .format("YYYY-[W]WW")
+          : moment(salesLabels[salesLabels.length - 1])
+              .add(i, "month")
+              .format("YYYY-MM");
+      forecastLabels.push(nextDate);
+      forecastValues.push(a * nextX + b);
+    }
+    return { labels: forecastLabels, values: forecastValues };
+  }, [salesLabels, salesValues, period, selectedDate]);
+
+  const combinedLabels = [...salesLabels, ...forecastData.labels];
+  const combinedData = [...salesValues, ...Array(forecastData.labels.length).fill(null)];
+  const forecastLineData = [...Array(salesValues.length).fill(null), ...forecastData.values];
+
+  const lineDataWithForecast = {
+    labels: combinedLabels,
+    datasets: [
+      {
+        label: "Actual Revenue",
+        data: combinedData,
+        borderColor: "rgba(75,192,192,1)",
+        backgroundColor: "rgba(75,192,192,0.2)",
+        tension: 0.4,
+        fill: true,
+        pointRadius: 6,
+        pointHoverRadius: 8,
+      },
+      {
+        label: "Forecast Revenue",
+        data: forecastLineData,
+        borderColor: "rgba(255,99,132,1)",
+        borderDash: [5, 5],
+        backgroundColor: "rgba(255,99,132,0.1)",
+        tension: 0.4,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        fill: true,
+      },
+    ],
+  };
+
+  const exportPDF = () => {
+    const doc = new jsPDF();
+    doc.text("Analytics Report", 14, 20);
+    if (lineChartRef.current) {
+      const img = lineChartRef.current.toBase64Image();
+      doc.addImage(img, "PNG", 15, 30, 180, 90);
+    }
+    doc.save("Analytics_Report.pdf");
+  };
+
   return (
     <div
       style={{
@@ -65,191 +196,64 @@ const Statistics = () => {
         fontFamily: "'Inter', sans-serif",
       }}
     >
-      <h1 style={{ textAlign: "center", marginBottom: 30, marginTop: 0 }}>
-        📊 Restaurant Statistics Dashboard
-      </h1>
+      <style>{styles}</style>
+      <h1 style={{ textAlign: "center", marginBottom: 30 }}>📊 Restaurant Statistics Dashboard</h1>
 
-      {/* KPIs Row */}
-      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center" }}>
-        <KpiCard title="Total Revenue (Monthly)" value={12500} suffix="$" color="#4caf50" />
-        <KpiCard title="Orders Today" value={320} color="#2196f3" />
-        <KpiCard title="Avg Order Value" value={38} suffix="$" color="#ff9800" />
-        <KpiCard title="Returning Customers" value={480} color="#f44336" />
+      {/* KPI */}
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 50 }}>
+        <div style={{ transform: "scale(1.3)", ...glowStyle }}>
+          <KpiCard title="Orders Today" value={320} color="#2196f3" />
+        </div>
       </div>
 
-      {/* Sales & Orders Section */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 40,
-          marginTop: 50,
-          justifyContent: "center",
-        }}
-      >
-        {/* Best Selling Dish Pie Chart */}
-        <div
-          style={{
-            background: "white",
-            borderRadius: 20,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.1)",
-            padding: 20,
-            flex: "1 1 350px",
-            maxWidth: 450,
-          }}
-        >
-          <h2 style={{ textAlign: "center", marginBottom: 20 }}>
-            Best-Selling Dishes
-          </h2>
+      {/* Charts Row */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 40, justifyContent: "center" }}>
+        {/* Pie Chart */}
+        <div style={{ background: "white", borderRadius: 20, boxShadow: "0 8px 24px rgba(0,0,0,0.1)", padding: 20, flex: "1 1 350px", maxWidth: 450 }}>
+          <h2 style={{ textAlign: "center", marginBottom: 20 }}>Best-Selling Dishes</h2>
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
-              <Pie
-                data={dataBestSelling}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={100}
-                label
-              >
+              <Pie data={dataBestSelling} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
                 {dataBestSelling.map((_, idx) => (
                   <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip />
-              <Legend verticalAlign="bottom" height={36} />
+              <ReTooltip />
+              <ReLegend verticalAlign="bottom" height={36} />
             </PieChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Orders Per Day Bar Chart */}
-        <div
-          style={{
-            background: "white",
-            borderRadius: 20,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.1)",
-            padding: 20,
-            flex: "1 1 350px",
-            maxWidth: 450,
-          }}
-        >
-          <h2 style={{ textAlign: "center", marginBottom: 20 }}>
-            Orders Per Day
-          </h2>
+        {/* Bar Chart */}
+        <div style={{ background: "white", borderRadius: 20, boxShadow: "0 8px 24px rgba(0,0,0,0.1)", padding: 20, flex: "1 1 350px", maxWidth: 450 }}>
+          <h2 style={{ textAlign: "center", marginBottom: 20 }}>Orders Per Day</h2>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={ordersPerDay}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="day" />
               <YAxis />
-              <Tooltip />
+              <ReTooltip />
               <Bar dataKey="orders" fill="#8884d8" radius={[10, 10, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* Customer Insights Section */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 40,
-          marginTop: 50,
-          justifyContent: "center",
-        }}
-      >
-        {/* New vs Returning Customers Doughnut */}
-        <div
-          style={{
-            background: "white",
-            borderRadius: 20,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.1)",
-            padding: 20,
-            flex: "1 1 300px",
-            maxWidth: 400,
-          }}
-        >
-          <h2 style={{ textAlign: "center", marginBottom: 20 }}>
-            New vs Returning Customers
-          </h2>
-          <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie
-                data={newVsReturning}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={80}
-                innerRadius={40}
-                label
-              >
-                {newVsReturning.map((_, idx) => (
-                  <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-              <Legend verticalAlign="bottom" height={36} />
-            </PieChart>
-          </ResponsiveContainer>
+      {/* Revenue Line Chart */}
+      <div style={{ background: "white", padding: 20, borderRadius: 20, boxShadow: "0 8px 24px rgba(0,0,0,0.1)", marginTop: 50 }}>
+        <h2 style={{ color: "#2c3e50", marginBottom: 20 }}>Revenue Analysis</h2>
+        <div style={{ display: "flex", gap: 20, marginBottom: 20 }}>
+          <select value={period} onChange={(e) => setPeriod(e.target.value)} className="form-select" style={{ width: "200px" }}>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+          {period === "daily" && (
+            <input type="date" className="form-control" style={{ width: "200px" }} value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
+          )}
+          <button className="btn btn-primary" onClick={exportPDF}>Export PDF</button>
         </div>
-
-        {/* Average Ratings Over Time Line Chart */}
-        <div
-          style={{
-            background: "white",
-            borderRadius: 20,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.1)",
-            padding: 20,
-            flex: "1 1 400px",
-            maxWidth: 450,
-          }}
-        >
-          <h2 style={{ textAlign: "center", marginBottom: 20 }}>
-            Average Ratings Over Time
-          </h2>
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={ratingsOverTime}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis domain={[3, 5]} />
-              <Tooltip />
-              <Line
-                type="monotone"
-                dataKey="rating"
-                stroke="#82ca9d"
-                strokeWidth={3}
-                dot={{ r: 5, stroke: "#82ca9d", strokeWidth: 2 }}
-                activeDot={{ r: 8 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Promotions Section */}
-      <div
-        style={{
-          background: "white",
-          borderRadius: 20,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.1)",
-          padding: 20,
-          marginTop: 50,
-          maxWidth: 900,
-          marginLeft: "auto",
-          marginRight: "auto",
-        }}
-      >
-        <h2 style={{ textAlign: "center", marginBottom: 20 }}>Coupon Usage</h2>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={couponUsage} layout="vertical" margin={{ left: 50 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis type="number" />
-            <YAxis dataKey="name" type="category" />
-            <Tooltip />
-            <Bar dataKey="uses" fill="#ff7f50" radius={[10, 10, 10, 10]} />
-          </BarChart>
-        </ResponsiveContainer>
+        <Line ref={lineChartRef} data={lineDataWithForecast} />
       </div>
     </div>
   );

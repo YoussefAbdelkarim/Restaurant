@@ -8,10 +8,8 @@ import CreateEmployee from './CreateEmployee';
 import ManageMenu from './ManageMenu';
 import CreateItem from './CreateItem';
 import ViewEmployees from './ViewEmployees';
-import AnalyticsDashboard from './AnalyticsDashboard';
 import InventoryDashboard from './InventoryDashboard';
 import CreateIngredient from './CreateIngredient';
-import { dummyOrders } from './DummyData';
 import Payments from './payments';
 import AddPayment from './AddPayment';
 import { FaBars, FaTimes } from "react-icons/fa";
@@ -77,7 +75,7 @@ export default function AdminDashboard() {
                   { name: 'Employees', to: '/AdminDashboard/viewEmployees' },
                   { name: 'Menu', to: '/AdminDashboard/menu' },
                   { name: 'Orders', to: '/AdminDashboard/orders' },
-                  { name: 'Analytics', to: '/AdminDashboard/analytics' },       
+                    
                   { name: 'Inventory', to: '/AdminDashboard/inventory' }, 
                   { name: 'Payments', to: '/AdminDashboard/payments' },
                   { name: 'Daily Inventory', to: '/AdminDashboard/daily' },        
@@ -124,7 +122,7 @@ export default function AdminDashboard() {
             {role !== 'cleaner' && <Route path="menu/create" element={<CreateItem />} />}
             {role !== 'cleaner' && <Route path="orders" element={<Orders />} />}
             {role !== 'cleaner' && <Route path="addOrder" element={<AddOrder />} />}
-            {role !== 'cleaner' && <Route path="analytics" element={<AnalyticsDashboard orders={dummyOrders} />} />}
+            
             {role !== 'cleaner' && <Route path="inventory" element={<InventoryDashboard />} />}
             {role !== 'cleaner' && <Route path="inventory/create" element={<CreateIngredient />} />}
             {role !== 'cleaner' && <Route path="payments" element={<Payments />} />}
