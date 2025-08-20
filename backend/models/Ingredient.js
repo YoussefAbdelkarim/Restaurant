@@ -11,7 +11,7 @@ const ingredientSchema = new mongoose.Schema(
     },
     unit: {
       type: String,
-      enum: ['g', 'kg', 'l', 'piece', 'unit'],
+      enum: ['g', 'kg', 'l', 'ml', 'piece', 'unit'],
       required: [true, 'Unit is required'],
     },
     currentStock: {
@@ -38,6 +38,11 @@ const ingredientSchema = new mongoose.Schema(
     alertThreshold: {
       type: Number,
       default: 0,
+    },
+    isManuallyOutOfStock: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
   },
   {

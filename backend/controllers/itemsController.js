@@ -3,7 +3,7 @@ const Ingredient = require('../models/Ingredient');
 
 const createItem = async (req, res) => {
   try {
-    const { name, category, price, ingredients, currentStock, alertThreshold } = req.body;
+    const { name, category, price, ingredients, currentStock, alertThreshold, steps, instructions, isAvailable } = req.body;
 
     if (!name || !category || !price) {
       return res.status(400).json({ message: 'Name, category, and price are required' });
@@ -23,6 +23,10 @@ const createItem = async (req, res) => {
         if (!ingredientExists) {
           return res.status(404).json({ message: `Ingredient not found: ${ing.ingredient}` });
         }
+        // Enforce unit to match the inventory ingredient's unit for consistency
+        ing.unit = ing.unit || ingredientExists.unit;
+        // Optional: default name to ingredient name for display
+        if (!ing.name) ing.name = ingredientExists.name;
       }
     }
 
@@ -31,8 +35,11 @@ const createItem = async (req, res) => {
       category, 
       price, 
       ingredients: ingredients || [], 
+      isAvailable: typeof isAvailable === 'boolean' ? isAvailable : true,
       currentStock: currentStock || 0, 
-      alertThreshold: alertThreshold || 20 
+      alertThreshold: alertThreshold || 20,
+      steps: Array.isArray(steps) ? steps : [],
+      instructions: typeof instructions === 'string' ? instructions : ''
     });
     await newItem.save();
 
@@ -76,7 +83,7 @@ const getItemById = async (req, res) => {
 
 const updateItem = async (req, res) => {
   try {
-    const { name, category, price, ingredients } = req.body;
+    const { name, category, price, ingredients, steps, instructions, isAvailable } = req.body;
 
     const item = await Item.findById(req.params.id);
     if (!item) {
@@ -85,8 +92,25 @@ const updateItem = async (req, res) => {
 
     if (name) item.name = name;
     if (category) item.category = category;
-    if (price) item.price = price;
-    if (ingredients) item.ingredients = ingredients;
+    if (price !== undefined) item.price = price;
+    if (typeof isAvailable === 'boolean') item.isAvailable = isAvailable;
+    if (Array.isArray(ingredients)) {
+      // Validate provided ingredients
+      for (const ing of ingredients) {
+        if (!ing.ingredient || !ing.quantity || !ing.unit) {
+          return res.status(400).json({ message: 'Each ingredient must have a quantity and unit' });
+        }
+        const ingredientExists = await Ingredient.findById(ing.ingredient);
+        if (!ingredientExists) {
+          return res.status(404).json({ message: `Ingredient not found: ${ing.ingredient}` });
+        }
+        ing.unit = ing.unit || ingredientExists.unit;
+        if (!ing.name) ing.name = ingredientExists.name;
+      }
+      item.ingredients = ingredients;
+    }
+    if (Array.isArray(steps)) item.steps = steps;
+    if (typeof instructions === 'string') item.instructions = instructions;
 
     await item.save();
 

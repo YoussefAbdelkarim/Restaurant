@@ -20,16 +20,7 @@ export default function ManageMenu() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedDish, setSelectedDish] = useState(null);
-
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    price: '',
-    available: 'yes',
-    category: categories[0],
-    ingredients: '',
-    photo: null,
-  });
+  
 
   // New state for Edit Modal
   const [showEditForm, setShowEditForm] = useState(false);
@@ -158,63 +149,7 @@ export default function ManageMenu() {
     setSelectedDish(null);
   };
 
-  // ADD MODAL HANDLERS
-  const handleInputChange = (e) => {
-    const { name, value, type, files } = e.target;
-    if (type === 'file') {
-      setFormData((prev) => ({ ...prev, [name]: files[0] }));
-    } else {
-      setFormData((prev) => ({ ...prev, [name]: value }));
-    }
-  };
-
-  const handleAddItemSubmit = (e) => {
-    e.preventDefault();
-
-    if (
-      !formData.name.trim() ||
-      formData.price === '' ||
-      isNaN(parseFloat(formData.price)) ||
-      !formData.category ||
-      !formData.ingredients.trim() ||
-      !formData.photo
-    ) {
-      alert('Please fill all fields correctly.');
-      return;
-    }
-
-    const token = localStorage.getItem('token');
-    const data = new FormData();
-    data.append('name', formData.name.trim());
-    data.append('price', parseFloat(formData.price));
-    data.append('isAvailable', formData.available === 'yes');
-    data.append('category', formData.category);
-    data.append('ingredients', formData.ingredients.trim());
-    data.append('photo', formData.photo);
-
-    fetch('/api/items', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: data,
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to add item');
-        return res.json();
-      })
-      .then((newItem) => {
-        setMenu((prev) => [...prev, newItem]);
-        setShowAddForm(false);
-        setFormData({
-          name: '',
-          price: '',
-          available: 'yes',
-          category: categories[0],
-          ingredients: '',
-          photo: null,
-        });
-      })
-      .catch((err) => alert(err.message));
-  };
+  // Add Item functionality removed; items can be created from CreateItem page
 
   if (loading) return <p>Loading menu...</p>;
   if (error) return <p>Error: {error}</p>;
@@ -229,10 +164,7 @@ export default function ManageMenu() {
     <div className="manage-menu-container">
       <div className="top-bar">
         <h2 className="manage-menu-title">Manage Restaurant Menu</h2>
-
-        <button className="add-item-btn" onClick={() => setShowAddForm(true)}>
-          + Add Item
-        </button>
+        {/* Add Item button removed; use Create Item page */}
       </div>
 
       {Object.entries(groupedByCategory).map(([category, items]) => (
@@ -288,109 +220,7 @@ export default function ManageMenu() {
         </div>
       ))}
 
-      {/* Add Item Modal */}
-      {showAddForm && (
-        <div className="modal-back" onClick={() => setShowAddForm(false)}>
-          <form
-            className="modal-cont"
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={handleAddItemSubmit}
-          >
-            <div className="modal-head">
-              <h2>Add New Dish</h2>
-              <button
-                type="button"
-                className="modal-close-btn"
-                onClick={() => setShowAddForm(false)}
-                aria-label="Close modal"
-              >
-                &times;
-              </button>
-            </div>
-
-            <label>
-              Name:
-              <input
-                type="text"
-                name="name"
-                value={formData.name}
-                onChange={handleInputChange}
-                required
-                autoFocus
-              />
-            </label>
-
-            <label>
-              Price:
-              <input
-                type="number"
-                step="0.01"
-                name="price"
-                value={formData.price}
-                onChange={handleInputChange}
-                required
-              />
-            </label>
-
-            <label>
-              Available:
-              <select
-                name="available"
-                value={formData.available}
-                onChange={handleInputChange}
-              >
-                <option value="yes">Yes</option>
-                <option value="no">No</option>
-              </select>
-            </label>
-
-            <label>
-              Category:
-              <select
-                name="category"
-                value={formData.category}
-                onChange={handleInputChange}
-                required
-              >
-                {categories.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              Ingredients:
-              <textarea
-                name="ingredients"
-                value={formData.ingredients}
-                onChange={handleInputChange}
-                required
-                placeholder="Separate ingredients by commas"
-              />
-            </label>
-
-            <label>
-              Photo:
-              <input
-                type="file"
-                name="photo"
-                accept="image/*"
-                onChange={handleInputChange}
-                required
-              />
-            </label>
-
-            <div className="modal-buttons">
-              <button type="submit" style={{ backgroundColor: 'green', color: 'white' }}>Add</button>
-              <button type="button" onClick={() => setShowAddForm(false)}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      {/* Add Item Modal removed; use Create Item page */}
 
       {/* Edit Item Modal */}
       {showEditForm && (

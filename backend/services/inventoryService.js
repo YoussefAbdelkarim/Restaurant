@@ -1,33 +1,73 @@
 const Item = require('../models/Item');
 const Ingredient = require('../models/Ingredient');
+const OldIngredient = require('../models/OldIngredient');
+const { convertToIngredientUnit: convertUnitUtil } = require('./unitUtils');
 
 class InventoryService {
-  // Convert requirement units to ingredient's unit; also normalize legacy units
+  // Convert requirement units to ingredient's unit via shared utils
   static convertToIngredientUnit(requirementUnit, ingredientUnit, quantity) {
-    const norm = (u) => {
-      const m = String(u || '').toLowerCase();
-      if (m === 'grams' || m === 'g') return { u: 'g', factor: 1 };
-      if (m === 'kg' || m === 'kilograms') return { u: 'kg', factor: 1 };
-      if (m === 'ml' || m === 'milliliters') return { u: 'l', factor: 1/1000 };
-      if (m === 'l' || m === 'liters') return { u: 'l', factor: 1 };
-      if (m === 'pieces' || m === 'piece') return { u: 'piece', factor: 1 };
-      if (m === 'unit' || m === 'units') return { u: 'unit', factor: 1 };
-      return { u: m, factor: 1 };
+    return convertUnitUtil(requirementUnit, ingredientUnit, quantity);
+  }
+
+  /**
+   * Helper to subtract from main Ingredient and FIFO from OldIngredient batches
+   * @param {import('../models/Ingredient')} ingredient
+   * @param {number} requiredQuantity - in the ingredient's unit
+   * @param {string|null} contextName
+   */
+  static async subtractFromIngredientAndBatches(ingredient, requiredQuantity, contextName = null) {
+    if (!ingredient) {
+      return { success: false, error: 'Ingredient not provided' };
+    }
+    if (ingredient.currentStock < requiredQuantity) {
+      return { success: false, error: `Insufficient stock for ${ingredient.name}` };
+    }
+
+    const previousStock = ingredient.currentStock;
+    ingredient.currentStock -= requiredQuantity;
+    await ingredient.save();
+
+    // Deduct from oldest batches first (FIFO)
+    try {
+      let remaining = requiredQuantity;
+      const batches = await OldIngredient.find({
+        originalIngredient: ingredient._id,
+        currentStock: { $gt: 0 }
+      }).sort({ snapshotDate: 1, createdAt: 1 });
+
+      for (const batch of batches) {
+        if (remaining <= 0) break;
+        const takeQuantity = Math.min(batch.currentStock, remaining);
+        batch.currentStock -= takeQuantity;
+        await batch.save();
+        remaining -= takeQuantity;
+      }
+      // If remaining > 0 here, it means batch records are out-of-sync with Ingredient stock.
+      // We already guarded with Ingredient stock check, so we won't fail the operation.
+    } catch (e) {
+      // Non-fatal; keep operation resilient
+    }
+
+    // Log inventory transaction
+    try {
+      const InventoryTransaction = require('../models/InventoryTransaction');
+      await InventoryTransaction.create({
+        ingredient: ingredient._id,
+        quantity: requiredQuantity,
+        operation: 'subtract',
+        kind: 'usage',
+        unitPrice: Number(ingredient.pricePerUnit || 0),
+        amount: Number(ingredient.pricePerUnit || 0) * requiredQuantity,
+        date: new Date(),
+        notes: contextName ? `Used for preparing ${contextName}` : `Usage deduction`,
+      });
+    } catch (e) {}
+
+    return {
+      success: true,
+      previousStock,
+      newStock: ingredient.currentStock,
     };
-    const req = norm(requirementUnit);
-    const ing = norm(ingredientUnit);
-    // Convert requirement to canonical base where possible
-    let qtyInCanonical = quantity * req.factor;
-    // Now convert canonical to ingredient unit
-    if (req.u === 'g' && ing.u === 'kg') return qtyInCanonical / 1000;
-    if (req.u === 'kg' && ing.u === 'g') return qtyInCanonical * 1000;
-    if (req.u === 'l' && ing.u === 'l') return qtyInCanonical;
-    if (req.u === 'g' && ing.u === 'g') return qtyInCanonical;
-    if (req.u === 'kg' && ing.u === 'kg') return qtyInCanonical;
-    if (req.u === 'piece' && ing.u === 'piece') return qtyInCanonical;
-    if (req.u === 'unit' && ing.u === 'unit') return qtyInCanonical;
-    // If units differ but not convertible with our set, assume the requirement is already in ingredient units
-    return quantity;
   }
   /**
    * Process an order and deduct ingredients from inventory
@@ -54,7 +94,7 @@ class InventoryService {
 
         if (item) {
           // Prefer deducting from ingredients via recipe to record usage properly
-          const preparationResult = await this.prepareFromIngredients(item.name, quantity);
+          const preparationResult = await this.prepareFromIngredients(item.name, quantity, { itemDoc: item });
           if (preparationResult.success) {
             results.processedItems.push({
               name: itemName,
@@ -96,10 +136,11 @@ class InventoryService {
    * @param {number} quantity - Quantity to prepare
    * @returns {Object} - Result with success status and ingredients used
    */
-  static async prepareFromIngredients(itemName, quantity) {
+  static async prepareFromIngredients(itemName, quantity, options = {}) {
     try {
+      const { itemDoc: providedItemDoc } = options;
       // Try to read recipe from Items collection first
-      const itemDoc = await Item.findOne({ name: { $regex: new RegExp(itemName, 'i') } });
+      const itemDoc = providedItemDoc || await Item.findOne({ name: { $regex: new RegExp(itemName, 'i') } });
       let dishRequirements = null;
       if (itemDoc && Array.isArray(itemDoc.ingredients) && itemDoc.ingredients.length) {
         dishRequirements = itemDoc.ingredients.map(r => ({
@@ -132,7 +173,10 @@ class InventoryService {
       }
 
       // Deduct ingredients from inventory
-      const deductionResult = await this.deductIngredients(dishRequirements, quantity);
+      const deductionResult = await this.deductIngredients(dishRequirements, quantity, {
+        resolvedDetails: ingredientCheck.details,
+        contextName: itemName,
+      });
       
       if (deductionResult.success) {
         return {
@@ -227,6 +271,7 @@ class InventoryService {
    */
   static async checkIngredientAvailability(dishRequirements, quantity) {
     const missingIngredients = [];
+    const details = [];
 
     for (const requirement of dishRequirements) {
       let ingredient = null;
@@ -246,14 +291,23 @@ class InventoryService {
 
       const requiredQuantityRaw = requirement.quantity * quantity;
       const requiredQuantity = this.convertToIngredientUnit(requirement.unit, ingredient.unit, requiredQuantityRaw);
-      if (ingredient.currentStock < requiredQuantity) {
-        missingIngredients.push(`${requirement.name} (need ${requiredQuantity} ${ingredient.unit}, have ${ingredient.currentStock} ${ingredient.unit})`);
+      if (ingredient.isManuallyOutOfStock || ingredient.currentStock < requiredQuantity) {
+        missingIngredients.push(`${ingredient.name} (need ${requiredQuantity} ${ingredient.unit}, have ${ingredient.currentStock} ${ingredient.unit})`);
       }
+      details.push({
+        ingredientId: ingredient._id,
+        name: ingredient.name,
+        unit: ingredient.unit,
+        required: requiredQuantity,
+        available: ingredient.isManuallyOutOfStock ? 0 : ingredient.currentStock,
+        ingredientDoc: ingredient
+      });
     }
 
     return {
       available: missingIngredients.length === 0,
-      missingIngredients
+      missingIngredients,
+      details
     };
   }
 
@@ -263,63 +317,57 @@ class InventoryService {
    * @param {number} quantity - Quantity to prepare
    * @returns {Object} - Result with deduction status
    */
-  static async deductIngredients(dishRequirements, quantity) {
+  static async deductIngredients(dishRequirements, quantity, options = {}) {
     const ingredientsUsed = [];
+    const { resolvedDetails = null, contextName = null } = options;
 
     try {
-      for (const requirement of dishRequirements) {
-        let ingredient = null;
-        if (requirement.ingredientId) {
-          ingredient = await Ingredient.findById(requirement.ingredientId);
-        }
-        if (!ingredient && requirement.name) {
-          ingredient = await Ingredient.findOne({ 
-            name: { $regex: new RegExp(requirement.name, 'i') } 
-          });
-        }
-        
-        if (!ingredient) {
-          return {
-            success: false,
-            error: `Ingredient ${requirement.name} not found`
-          };
-        }
-
-        const requiredQuantity = this.convertToIngredientUnit(requirement.unit, ingredient.unit, requirement.quantity * quantity);
-        
-        if (ingredient.currentStock < requiredQuantity) {
-          return {
-            success: false,
-            error: `Insufficient stock for ${requirement.name}`
-          };
-        }
-
-        // Deduct the ingredient and log usage transaction
-        ingredient.currentStock -= requiredQuantity;
-        await ingredient.save();
-        try {
-          const InventoryTransaction = require('../models/InventoryTransaction');
-          await InventoryTransaction.create({
-            ingredient: ingredient._id,
+      if (resolvedDetails) {
+        for (const d of resolvedDetails) {
+          const ingredient = d.ingredientDoc;
+          const requiredQuantity = d.required;
+          if (!ingredient) {
+            return { success: false, error: 'Ingredient not found in resolved details' };
+          }
+          const subResult = await this.subtractFromIngredientAndBatches(ingredient, requiredQuantity, contextName ? `${quantity}x ${contextName}` : null);
+          if (!subResult.success) {
+            return { success: false, error: subResult.error };
+          }
+          ingredientsUsed.push({
+            name: ingredient.name,
             quantity: requiredQuantity,
-            operation: 'subtract',
-            kind: 'usage',
-            unitPrice: Number(ingredient.pricePerUnit || 0),
-            amount: Number(ingredient.pricePerUnit || 0) * requiredQuantity,
-            date: new Date(),
-            notes: `Used for preparing ${quantity}x ${dishName}`,
+            unit: ingredient.unit,
+            previousStock: subResult.previousStock,
+            newStock: subResult.newStock
           });
-        } catch (e) {
-          // non-fatal
         }
-
-        ingredientsUsed.push({
-          name: ingredient.name,
-          quantity: requiredQuantity,
-          unit: ingredient.unit,
-          previousStock: ingredient.currentStock + requiredQuantity,
-          newStock: ingredient.currentStock
-        });
+      } else {
+        for (const requirement of dishRequirements) {
+          let ingredient = null;
+          if (requirement.ingredientId) {
+            ingredient = await Ingredient.findById(requirement.ingredientId);
+          }
+          if (!ingredient && requirement.name) {
+            ingredient = await Ingredient.findOne({ 
+              name: { $regex: new RegExp(requirement.name, 'i') } 
+            });
+          }
+          if (!ingredient) {
+            return { success: false, error: `Ingredient ${requirement.name} not found` };
+          }
+          const requiredQuantity = this.convertToIngredientUnit(requirement.unit, ingredient.unit, requirement.quantity * quantity);
+          const subResult = await this.subtractFromIngredientAndBatches(ingredient, requiredQuantity, contextName ? `${quantity}x ${contextName}` : null);
+          if (!subResult.success) {
+            return { success: false, error: subResult.error };
+          }
+          ingredientsUsed.push({
+            name: ingredient.name,
+            quantity: requiredQuantity,
+            unit: ingredient.unit,
+            previousStock: subResult.previousStock,
+            newStock: subResult.newStock
+          });
+        }
       }
 
       return {

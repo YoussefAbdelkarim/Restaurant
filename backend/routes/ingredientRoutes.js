@@ -8,6 +8,7 @@ router.post('/', protect,ingredientController.createIngredient);
 router.get('/:id', protect,ingredientController.getIngredientById);
 router.put('/:id', protect,ingredientController.updateIngredient);
 router.patch('/:id/stock', protect, ingredientController.updateIngredientStock);
+router.patch('/:id/manual-oos', protect, ingredientController.toggleManualOutOfStock);
 router.delete('/:id',protect,ingredientController.deleteIngredient);
 
 module.exports = router;
