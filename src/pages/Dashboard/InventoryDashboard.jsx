@@ -429,7 +429,7 @@ export default function InventoryDashboard() {
         <div className="d-flex gap-2">
           <Button 
             variant="success" 
-            onClick={() => setShowAddIngredient(true)}
+            onClick={() => navigate('/AdminDashboard/inventory/create')}
             className="d-flex align-items-center gap-2"
           >
             <i className="fas fa-plus"></i>
@@ -565,14 +565,16 @@ export default function InventoryDashboard() {
                       >
                         {item.isManuallyOutOfStock ? 'Unflag OOS' : 'Flag OOS'}
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline-dark"
-                        onClick={() => handleSetStockZero(item._id)}
-                        title="Set stock to 0"
-                      >
-                        Set 0
-                      </Button>
+                      {item.isManuallyOutOfStock && (
+                        <Button
+                          size="sm"
+                          variant="outline-dark"
+                          onClick={() => handleSetStockZero(item._id)}
+                          title="Set stock to 0"
+                        >
+                          Set 0
+                        </Button>
+                      )}
                       <Button 
                         size="sm" 
                         variant="success" 
@@ -626,81 +628,7 @@ export default function InventoryDashboard() {
         </Card.Body>
       </Card>
 
-      {/* Add Ingredient Modal */}
-      <Modal show={showAddIngredient} onHide={() => setShowAddIngredient(false)} className="mb-4">
-        <Modal.Header closeButton>
-          <Modal.Title>Add New Ingredient</Modal.Title>
-        </Modal.Header>
-        <Form onSubmit={handleAddIngredient}>
-          <Modal.Body>
-            <Form.Group className="mb-3">
-              <Form.Label>Ingredient Name</Form.Label>
-              <Form.Control
-                type="text"
-                value={newIngredient.name}
-                onChange={(e) => setNewIngredient({...newIngredient, name: e.target.value})}
-                required
-              />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Current Stock</Form.Label>
-              <Form.Control
-                type="number"
-                min="0"
-                value={newIngredient.currentStock}
-                onChange={(e) => setNewIngredient({...newIngredient, currentStock: parseInt(e.target.value)})}
-                required
-              />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Unit</Form.Label>
-              <Form.Select
-                value={newIngredient.unit}
-                onChange={(e) => setNewIngredient({...newIngredient, unit: e.target.value})}
-                required
-              >
-                <option value="">Select Unit</option>
-                <option value="g">Grams (g)</option>
-                <option value="kg">Kilograms (kg)</option>
-                <option value="ml">Milliliters (ml)</option>
-                <option value="l">Liters (l)</option>
-                <option value="piece">Piece</option>
-              </Form.Select>
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Price per Unit</Form.Label>
-              <Form.Control
-                type="number"
-                min="0"
-                step="0.01"
-                value={newIngredient.pricePerUnit}
-                onChange={(e) => setNewIngredient({...newIngredient, pricePerUnit: parseFloat(e.target.value)})}
-                required
-              />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>Alert Threshold</Form.Label>
-              <Form.Control
-                type="number"
-                min="1"
-                value={newIngredient.alertThreshold}
-                onChange={(e) => setNewIngredient({...newIngredient, alertThreshold: parseInt(e.target.value)})}
-                required
-              />
-            </Form.Group>
-          </Modal.Body>
-          <Modal.Footer>
-            <Button variant="secondary" onClick={() => setShowAddIngredient(false)}>
-              Cancel
-            </Button>
-            <Button variant="success" type="submit">
-              Add Ingredient
-            </Button>
-          </Modal.Footer>
-        </Form>
-      </Modal>
-
-      {/* Add Item Modal removed */}
+      {/* Add Ingredient moved to its own page */}
     </div>  
   );
 }
