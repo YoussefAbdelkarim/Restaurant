@@ -9,12 +9,22 @@ import AddOrder from './AddOrder';
 import CreateEmployee from './CreateEmployee';
 import ManageMenu from './ManageMenu';
 import ViewEmployees from './ViewEmployees';
+<<<<<<< Updated upstream
  
 import AnalyticsDashboard from './AnalyticsDashboard';
+=======
+
+>>>>>>> Stashed changes
 import InventoryDashboard from './InventoryDashboard';
 import { dummyOrders, dummyInventory } from './DummyData';
 import Payments from './payments';
 import AddPayment from './AddPayment';
+<<<<<<< Updated upstream
+=======
+import { FaBars, FaTimes } from "react-icons/fa";
+import DailyInventory from './DailyInventory';
+import Customer from './customer';
+>>>>>>> Stashed changes
 function SidebarItem({ to, children }) {
   const [hover, setHover] = useState(false);
 
@@ -79,6 +89,30 @@ export default function AdminDashboard() {
 </ul>
 
 
+<<<<<<< Updated upstream
+=======
+              <ul className="nav flex-column">
+                {[
+                  { name: 'AI', to: '/AdminDashboard/ai' },
+                  { name: 'Statistics', to: '/AdminDashboard/statistics' },
+                  { name: 'Employees', to: '/AdminDashboard/viewEmployees' },
+                  { name: 'Menu', to: '/AdminDashboard/menu' },
+                  { name: 'Orders', to: '/AdminDashboard/orders' },
+                     
+                  { name: 'Inventory', to: '/AdminDashboard/inventory' }, 
+                  { name: 'Payments', to: '/AdminDashboard/payments' },
+                  { name: 'Daily Inventory', to: '/AdminDashboard/daily' },        
+                   { name: 'Customers', to: '/AdminDashboard/customer' },
+                ]
+                  // hide all dashboard entries if cleaner
+                  .filter(item => role !== 'cleaner')
+                  .map(({ name, to }) => (
+                  <li className="nav-item mb-2" key={name}>
+                    <SidebarItem to={to}>{name}</SidebarItem>
+                  </li>
+                ))}
+              </ul>
+>>>>>>> Stashed changes
             </>
           )}
         </div>
@@ -98,7 +132,27 @@ export default function AdminDashboard() {
            <Route path="payments" element={<Payments />} />
            <Route path="addPayment" element={<AddPayment />} />
 
+<<<<<<< Updated upstream
         </Routes>
+=======
+        <div>
+          <Routes>
+            {role !== 'cleaner' && <Route path="ai" element={<AI />} />}
+            {role !== 'cleaner' && <Route path="statistics" element={<Statistics />} />}
+            {role !== 'cleaner' && <Route path="ViewEmployees" element={<ViewEmployees />} />}
+            {role !== 'cleaner' && <Route path="CreateEmployee" element={<CreateEmployee />} />}
+            {role !== 'cleaner' && <Route path="menu" element={<ManageMenu />} />}
+            {role !== 'cleaner' && <Route path="orders" element={<Orders />} />}
+            {role !== 'cleaner' && <Route path="addOrder" element={<AddOrder />} />}
+          
+            {role !== 'cleaner' && <Route path="inventory" element={<InventoryDashboard />} />}
+            {role !== 'cleaner' && <Route path="payments" element={<Payments />} />}
+            {role !== 'cleaner' && <Route path="addPayment" element={<AddPayment />} />}
+            {role !== 'cleaner' && <Route path="daily" element={<DailyInventory />} />}
+            {role !== 'cleaner' && <Route path="customer" element={<Customer />} />}
+          </Routes>
+        </div>
+>>>>>>> Stashed changes
       </div>  
     </div>
   );
