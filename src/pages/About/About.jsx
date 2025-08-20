@@ -30,10 +30,10 @@ function About() {
             whileInView={{ opacity: 1, x: 0 }}
             transition={{ duration: 1 }}
           >
-            <p>Welcome to Korlake Restaurant in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
-            <p>Our restaurant is situated at 2 minutes walk from Azmi traffic light . The  facny lunch waiting you with your family or friends. We can't wait to serve you our delicious dishes!</p>
+            <p>Welcome to Flavor  Restaurant in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
+            <p>Our restaurant is situated at 2 minutes walk from Azmi traffic light . The  facny lunch waiting you with your family and friends. We can't wait to serve you our delicious dishes!</p>
             <Link to='/contact'>
-              <button type='button' className='custom-btn'>Contact us</button>
+              <button type='button' className='custom-btn'>Book Your Table</button>
             </Link>
           </motion.div>
           <motion.div 
