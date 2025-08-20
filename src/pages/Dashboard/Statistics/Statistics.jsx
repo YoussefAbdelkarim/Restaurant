@@ -196,14 +196,13 @@ const Statistics = () => {
         fontFamily: "'Inter', sans-serif",
       }}
     >
-<<<<<<< Updated upstream
+
       <h1 style={{ textAlign: "center", marginBottom: 40 }}>
         📊 Restaurant Statistics Dashboard
       </h1>
-=======
       <style>{styles}</style>
       <h1 style={{ textAlign: "center", marginBottom: 30 }}>📊 Restaurant Statistics Dashboard</h1>
->>>>>>> Stashed changes
+
 
       {/* KPI */}
       <div style={{ display: "flex", justifyContent: "center", marginBottom: 50 }}>

@@ -24,8 +24,8 @@ function AboutUsSection() {
                 transition={{ duration: 1 }}
             >
                 <h2 className='text-uppercase fw-bold fs-1 mb-4 mb-lg-5'>About us</h2>
-                <p>Welcome to Korlake Restaurant in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
-                <p className='mb-4 mb-lg-5'>Our restaurant is situated at 5 minutes walk from train station and shopping center. The location is ideal for a perfect breakfast, a facny lunch or a nice dinner with your family or friends. We can't wait to serve you our delicious dishes!</p>
+                <p>Welcome to Flavor Hub Restaurant in Lebanon, the perfect experience for special people. Our fancy restaurant will bring your special moments to another level.</p>
+                <p className='mb-4 mb-lg-5'>Our restaurant is situated at 5 minutes walk from Azmi trafiic light. The location is ideal for a perfect breakfast, a facny lunch and a nice dinner with your family or friends. We can't wait to serve you our delicious dishes!</p>
                 <Link to='/about'>
                     <button type='button' className='custom-btn'
                     >More about us</button>
