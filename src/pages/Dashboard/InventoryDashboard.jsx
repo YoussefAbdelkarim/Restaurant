@@ -427,15 +427,7 @@ export default function InventoryDashboard() {
           <p className="text-muted mb-0">Manage your restaurant's inventory and stock levels</p>
         </div>
         <div className="d-flex gap-2">
-          <Button 
-            variant="success" 
-            onClick={() => navigate('/AdminDashboard/inventory/create')}
-            className="d-flex align-items-center gap-2"
-          >
-            <i className="fas fa-plus"></i>
-            Add Ingredient
-          </Button>
-          {/* Removed Add Item button */}
+          {/* Removed Add Ingredient button */}
           <Button 
             variant="outline-primary" 
             onClick={fetchInventory}

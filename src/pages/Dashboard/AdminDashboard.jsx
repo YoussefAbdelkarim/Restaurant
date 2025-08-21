@@ -70,15 +70,14 @@ export default function AdminDashboard() {
 
               <ul className="nav flex-column">
                 {[
-                  { name: 'AI', to: '/AdminDashboard/ai' },
                   { name: 'Statistics', to: '/AdminDashboard/statistics' },
                   { name: 'Employees', to: '/AdminDashboard/viewEmployees' },
                   { name: 'Menu', to: '/AdminDashboard/menu' },
                   { name: 'Orders', to: '/AdminDashboard/orders' },
-                    
                   { name: 'Inventory', to: '/AdminDashboard/inventory' }, 
                   { name: 'Payments', to: '/AdminDashboard/payments' },
-                  { name: 'Daily Inventory', to: '/AdminDashboard/daily' },        
+                  { name: 'Daily Inventory', to: '/AdminDashboard/daily' },
+                  { name: 'AI', to: '/AdminDashboard/ai' },        
                 ]
                   // hide all dashboard entries if cleaner
                   .filter(item => role !== 'cleaner')
@@ -94,24 +93,6 @@ export default function AdminDashboard() {
       </div>
 
       <div className="flex-grow-1">
-        {/* Back Button */}
-        <button 
-          onClick={() => navigate('/')}
-          style={{
-            background: 'none',
-            border: '1px solid #6c757d',
-            borderRadius: '4px',
-            padding: '6px 12px',
-            cursor: 'pointer',
-            color: '#6c757d',
-            fontSize: '14px',
-            marginTop: '20px',
-            marginLeft: '20px'
-          }}
-        >
-          ← Go Back
-        </button>
-
         <div>
           <Routes>
             {role !== 'cleaner' && <Route path="ai" element={<AI />} />}

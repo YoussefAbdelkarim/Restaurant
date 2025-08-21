@@ -114,6 +114,8 @@ def log(*args: Any) -> None:
 
 def find_item_in_database(items_col, dish: str) -> Optional[Dict[str, Any]]:
     """Find item in MongoDB items collection by name (case-insensitive)"""
+    if items_col is None:
+        return None
     if not dish:
         return None
     
@@ -152,6 +154,8 @@ def fetch_inventory_map(ingredients_col) -> Dict[str, Dict[str, Any]]:
     Expected Ingredient docs to have at least: name, quantity, unit
     """
     inv = {}
+    if ingredients_col is None:
+        return inv
     for doc in ingredients_col.find({}):
         name = (doc.get("name") or "").strip().lower()
         if name:
@@ -161,6 +165,8 @@ def fetch_inventory_map(ingredients_col) -> Dict[str, Dict[str, Any]]:
 
 def resolve_ingredient_object_id(ingredients_col, name: str) -> Optional[ObjectId]:
     if not name:
+        return None
+    if ingredients_col is None:
         return None
     n = name.strip().lower()
     doc = ingredients_col.find_one({"name": {"$regex": f"^\\s*{re.escape(n)}\\s*$", "$options": "i"}})
@@ -173,6 +179,8 @@ def add_ingredients_to_inventory(ingredients_col, recipe_ingredients: List[Dict[
     if not AUTO_ADD_INGREDIENTS:
         return
     if not recipe_ingredients:
+        return
+    if ingredients_col is None:
         return
     
     for ing in recipe_ingredients:
@@ -356,6 +364,69 @@ def gemini_compose_recipe_from_web(model, dish_name: str, web_snippets: List[Dic
         raise RuntimeError("Failed to generate recipe from web snippets")
 
 
+def gemini_compose_recipe_simple(model, dish_name: str) -> Dict[str, Any]:
+    """Ask Gemini directly for a clean recipe JSON without web snippets.
+    Returns { name, category, instructions, steps, ingredients:[{name, quantity, unit}] }
+    """
+    prompt = {
+        "role": "user",
+        "parts": [
+            {
+                "text": (
+                    f"Provide a simple, reliable recipe for '{dish_name}'.\n"
+                    "Return STRICT JSON with keys: name (string), category (string),"
+                    " instructions (string), steps (string[]), ingredients (array of objects"
+                    " with name (string), quantity (number), unit (one of: g, kg, l, piece, unit))."
+                    " Use very simple, common ingredients and 4-10 short steps."
+                )
+            }
+        ]
+    }
+
+    resp = model.generate_content([
+        {"role": "system", "parts": [{"text": GEMINI_SYSTEM}]},
+        prompt,
+    ])
+
+    text = (resp.text or "").strip()
+    data = None
+    try:
+        data = json.loads(text)
+    except Exception:
+        m = re.search(r"\{[\s\S]*\}$", text)
+        if m:
+            try:
+                data = json.loads(m.group(0))
+            except Exception:
+                pass
+    if not isinstance(data, dict):
+        raise RuntimeError("Gemini did not return valid JSON for simple recipe")
+
+    data.setdefault("name", dish_name)
+    data.setdefault("category", guess_category(dish_name))
+    data.setdefault("instructions", "")
+    data.setdefault("steps", [])
+    data.setdefault("ingredients", [])
+
+    # Coerce ingredients
+    clean_ings = []
+    for ing in data.get("ingredients", []) or []:
+        name = str(ing.get("name") or "").strip()
+        if not name:
+            continue
+        qty = ing.get("quantity")
+        try:
+            qty = float(qty) if qty is not None else 0.0
+        except Exception:
+            qty = 0.0
+        unit = (ing.get("unit") or "unit").strip()
+        if unit not in {"g", "kg", "l", "piece", "unit"}:
+            unit = "unit"
+        clean_ings.append({"name": name, "quantity": qty, "unit": unit})
+    data["ingredients"] = clean_ings
+    return data
+
+
 # --------- Inventory cross-check ---------
 
 def compare_with_inventory(recipe_ings: List[Dict[str, Any]], inventory_map: Dict[str, Dict[str, Any]]):
@@ -385,6 +456,9 @@ def save_item_to_mongo(items_col, ingredients_col, item: Dict[str, Any]) -> str:
     """Save item into MongoDB 'items' collection following the Mongoose schema shape.
     Returns inserted _id as string (or existing id if upserted).
     """
+    if items_col is None:
+        # DB not available; skip persistence
+        return ""
     if not AUTO_SAVE_ITEMS:
         # Skip saving new items unless explicitly allowed
         # Try to return existing id if present; otherwise, return empty string
@@ -455,6 +529,46 @@ def make_fallback_recipe(dish_name: str) -> Dict[str, Any]:
         "steps": steps,
         "instructions": "\n".join(steps),
     }
+
+
+def get_curated_recipe(dish_name: str) -> Optional[Dict[str, Any]]:
+    """Return a simple curated recipe for common dishes when AI/DB are unavailable."""
+    n = (dish_name or "").strip().lower()
+    if not n:
+        return None
+    if "indian curry" in n or n == "curry" or "chicken curry" in n or "vegetable curry" in n:
+        # Units constrained to {g, kg, l, piece, unit}
+        ingredients = [
+            {"name": "oil", "quantity": 2.0, "unit": "unit"},
+            {"name": "onion", "quantity": 1.0, "unit": "piece"},
+            {"name": "garlic", "quantity": 3.0, "unit": "piece"},
+            {"name": "ginger", "quantity": 1.0, "unit": "piece"},
+            {"name": "tomato", "quantity": 2.0, "unit": "piece"},
+            {"name": "curry powder", "quantity": 2.0, "unit": "unit"},
+            {"name": "turmeric", "quantity": 1.0, "unit": "unit"},
+            {"name": "cumin", "quantity": 1.0, "unit": "unit"},
+            {"name": "salt", "quantity": 1.0, "unit": "unit"},
+            {"name": "black pepper", "quantity": 1.0, "unit": "unit"},
+            {"name": "water", "quantity": 0.3, "unit": "l"},
+        ]
+        steps = [
+            "Heat oil in a pot.",
+            "Add chopped onion; cook until soft.",
+            "Add minced garlic and grated ginger; cook briefly.",
+            "Add curry powder, turmeric, and cumin; stir 30 seconds.",
+            "Add chopped tomato; cook until soft and saucy.",
+            "Add water and simmer 5–10 minutes.",
+            "Season with salt and pepper; simmer to desired thickness.",
+            "Serve with rice or bread.",
+        ]
+        return {
+            "name": "Indian Curry",
+            "category": "plate",
+            "ingredients": ingredients,
+            "steps": steps,
+            "instructions": "\n".join(steps),
+        }
+    return None
 
 
 def handle_inventory_question(query: str, inventory_map: Dict[str, Dict[str, Any]]) -> Optional[str]:
@@ -602,6 +716,8 @@ def build_final_answer_with_gemini(model, user_query: str, recipe: Optional[Dict
 
 
 def summarize_db_state(items_col) -> Dict[str, Any]:
+    if items_col is None:
+        return {"total_items": None, "top_sold": []}
     try:
         total_items = items_col.count_documents({})
         top = items_col.find({}).sort("soldCount", -1).limit(5)
@@ -620,15 +736,22 @@ def main(user_query: str) -> str:
         )
 
     # Init services
-    # Connect to DB first to fail fast if misconfigured
-    client = mongo()
-    # Force a ping to verify connectivity
+    # Try to connect to DB, but continue gracefully if unavailable
+    client = None
     try:
-        client.admin.command('ping')
+        client = mongo()
+        try:
+            client.admin.command('ping')
+        except Exception as e:
+            raise RuntimeError(f"MongoDB connection failed: {e}")
     except Exception as e:
-        raise RuntimeError(f"MongoDB connection failed: {e}")
+        log("DB unavailable, continuing in no-DB mode:", e)
+        client = None
 
-    ingredients_col, items_col = get_collections(client)
+    if client is not None:
+        ingredients_col, items_col = get_collections(client)
+    else:
+        ingredients_col, items_col = None, None
     model = init_gemini()
     inventory_map = fetch_inventory_map(ingredients_col)
 
@@ -703,9 +826,13 @@ def main(user_query: str) -> str:
         try:
             recipe = gemini_compose_recipe_from_web(model, dish, ddg_snippets)
         except Exception:
-            recipe = make_fallback_recipe(dish)
+            try:
+                # Fallback to a direct Gemini JSON recipe without web snippets
+                recipe = gemini_compose_recipe_simple(model, dish)
+            except Exception:
+                recipe = get_curated_recipe(dish) or make_fallback_recipe(dish)
     else:
-        recipe = make_fallback_recipe(dish)
+        recipe = get_curated_recipe(dish) or make_fallback_recipe(dish)
 
     # Save to MongoDB (best-effort)
     try:
@@ -739,7 +866,21 @@ if __name__ == "__main__":
         reply = main(query)
         print(reply)
     except Exception as e:
+        # Graceful fallback instead of generic error line
         if DEBUG:
             traceback.print_exc()
-        print("Sorry, something went wrong while generating the answer.")
+        try:
+            query = sys.argv[1].strip() if len(sys.argv) > 1 else "Dish"
+        except Exception:
+            query = "Dish"
+        fallback_recipe = make_fallback_recipe(query)
+        # No DB, no inventory when in failure path
+        safe_reply = build_final_answer_with_gemini(
+            None,
+            query,
+            fallback_recipe,
+            ("none", []),
+            {"total_items": None, "top_sold": []}
+        )
+        print(safe_reply)
         sys.exit(0)
