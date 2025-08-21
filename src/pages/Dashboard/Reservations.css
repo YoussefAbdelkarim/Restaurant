@@ -1,0 +1,152 @@
+.reservations-container {
+  padding: 20px;
+  max-width: 100%;
+}
+
+.reservations-container h2 {
+  color: #333;
+  margin-bottom: 20px;
+  font-weight: 600;
+}
+
+.reservations-container .card {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  margin-bottom: 20px;
+}
+
+.reservations-container .card-body {
+  padding: 20px;
+}
+
+.reservations-container .table {
+  margin-bottom: 0;
+}
+
+.reservations-container .table th {
+  background-color: #f8f9fa;
+  border-bottom: 2px solid #dee2e6;
+  font-weight: 600;
+  color: #495057;
+  padding: 12px 8px;
+}
+
+.reservations-container .table td {
+  padding: 12px 8px;
+  vertical-align: middle;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.reservations-container .table tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+.reservations-container .badge {
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  border-radius: 12px;
+}
+
+.reservations-container .btn-sm {
+  padding: 4px 8px;
+  font-size: 0.875rem;
+}
+
+.reservations-container .form-control,
+.reservations-container .form-select {
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+
+.reservations-container .form-control:focus,
+.reservations-container .form-select:focus {
+  border-color: #80bdff;
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+.reservations-container .modal-header {
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.reservations-container .modal-footer {
+  background-color: #f8f9fa;
+  border-top: 1px solid #dee2e6;
+}
+
+.reservations-container .alert {
+  border-radius: 6px;
+  margin-bottom: 20px;
+}
+
+/* Statistics cards styling */
+.reservations-container .card h3 {
+  margin: 0;
+  font-weight: 700;
+}
+
+.reservations-container .text-primary {
+  color: #007bff !important;
+}
+
+.reservations-container .text-success {
+  color: #28a745 !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .reservations-container {
+    padding: 10px;
+  }
+  
+  .reservations-container .table {
+    font-size: 0.875rem;
+  }
+  
+  .reservations-container .btn-sm {
+    padding: 2px 6px;
+    font-size: 0.75rem;
+  }
+  
+  .reservations-container .d-flex.gap-1 {
+    flex-direction: column;
+    gap: 4px !important;
+  }
+}
+
+/* Loading and empty states */
+.reservations-container .text-center {
+  padding: 40px 20px;
+  color: #6c757d;
+}
+
+/* Filter section styling */
+.reservations-container .form-label {
+  font-weight: 500;
+  color: #495057;
+  margin-bottom: 6px;
+}
+
+/* Status badges specific styling */
+.reservations-container .badge.bg-warning {
+  background-color: #ffc107 !important;
+  color: #212529;
+}
+
+.reservations-container .badge.bg-success {
+  background-color: #28a745 !important;
+}
+
+.reservations-container .badge.bg-danger {
+  background-color: #dc3545 !important;
+}
+
+.reservations-container .badge.bg-info {
+  background-color: #17a2b8 !important;
+}
+
+.reservations-container .badge.bg-secondary {
+  background-color: #6c757d !important;
+}

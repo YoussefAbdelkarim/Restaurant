@@ -10,6 +10,7 @@ const orderRoutes = require('./routes/orderRoutes');
 const assistantRoutes = require('./routes/assistantRoutes'); 
 const paymentsRoutes = require('./routes/paymentsRoutes');
 const inventoryRoutes = require('./routes/inventoryRoutes');
+const reservationRoutes = require('./routes/reservationRoutes');
 
 const app = express();
 
@@ -25,6 +26,7 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/assistant', assistantRoutes); 
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/inventory', inventoryRoutes);
+app.use('/api/reservations', reservationRoutes);
 
 app.get('/', (req, res) => {
   res.send('Restaurant API is running ');

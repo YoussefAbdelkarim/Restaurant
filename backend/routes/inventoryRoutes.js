@@ -13,3 +13,4 @@ router.get('/daily', protect, allowRoles('admin', 'manager', 'accountant', 'cash
 module.exports = router;
 
 
+

@@ -243,3 +243,4 @@ const getDaily = async (req, res) => {
 module.exports = { openDay, closeDay, disposeIngredient, getDaily };
 
 
+
