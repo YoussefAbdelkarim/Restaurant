@@ -111,3 +111,62 @@ export const dummyInventory = [
     supplier: 'Italian Foods Ltd.'
   }
 ];
+
+// --- Dummy Reservations ---
+export const dummyReservations = [
+  {
+    _id: 'r1',
+    firstName: 'Aisha',
+    lastName: 'Khan',
+    emailAddress: 'aisha.khan@example.com',
+    phoneNumber: '+1 202 555 0101',
+    date: '2025-08-20T19:00:00Z',
+    numberOfGuests: 2,
+    status: 'confirmed',
+    comments: 'Window seat if possible.'
+  },
+  {
+    _id: 'r2',
+    firstName: 'Daniel',
+    lastName: 'Lee',
+    emailAddress: 'dan.lee@example.com',
+    phoneNumber: '+1 202 555 0175',
+    date: '2025-08-21T12:30:00Z',
+    numberOfGuests: 4,
+    status: 'pending',
+    comments: ''
+  },
+  {
+    _id: 'r3',
+    firstName: 'Maria',
+    lastName: 'Gomez',
+    emailAddress: 'maria.g@example.com',
+    phoneNumber: '+1 202 555 0142',
+    date: '2025-08-22T18:45:00Z',
+    numberOfGuests: 3,
+    status: 'completed',
+    comments: 'Birthday celebration.'
+  },
+  {
+    _id: 'r4',
+    firstName: 'Omar',
+    lastName: 'Hassan',
+    emailAddress: 'omar.hassan@example.com',
+    phoneNumber: '+1 202 555 0199',
+    date: '2025-08-23T20:15:00Z',
+    numberOfGuests: 6,
+    status: 'cancelled',
+    comments: ''
+  },
+  {
+    _id: 'r5',
+    firstName: 'Emily',
+    lastName: 'Brown',
+    emailAddress: 'emily.brown@example.com',
+    phoneNumber: '+1 202 555 0123',
+    date: '2025-08-24T13:00:00Z',
+    numberOfGuests: 2,
+    status: 'confirmed',
+    comments: 'Allergic to nuts.'
+  }
+];

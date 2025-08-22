@@ -58,12 +58,11 @@ export default function AdminDashboard() {
     </li>
   ))}
 </ul>
-
             </>
           )}
         </div>
       </div>
-
+      
       <div className="flex-grow-1 p-4">
         <Routes>
           <Route path="ai" element={<AI />} />
