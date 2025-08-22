@@ -66,7 +66,37 @@ export default function AdminDashboard() {
 
           {isOpen && (
             <>
+<<<<<<< Updated upstream
               <h5 className="fw-bold" style={{ color: '#000000ff' }}>Dashboard</h5>
+=======
+             <h5 className="fw-bold" style={{ color: '#000000ff' }}>Dashboard</h5>
+
+             <ul className="nav flex-column">
+  {[
+    { name: 'Statistics', to: '/AdminDashboard/statistics' },
+    { name: 'Employees', to: '/AdminDashboard/viewEmployees' },
+    { name: 'Menu', to: '/AdminDashboard/menu' },
+    { name: 'Orders', to: '/AdminDashboard/orders' },
+    { name: 'Reservations', to: '/AdminDashboard/reservations' },
+    { name: 'AI', to: '/AdminDashboard/ai' },
+  ].map(({ name, to }) => (
+    <li className="nav-item mb-2" key={name}>
+<NavLink
+  to={to}
+  className={({ isActive }) =>
+    `nav-link px-3 py-2 rounded fw-semibold ${
+      isActive ? 'active-link' : 'hover-bg text-dark'
+    }`
+  }
+  style={{ transition: 'all 0.3s ease' }}
+>
+  {name}
+</NavLink>
+
+    </li>
+  ))}
+</ul>
+>>>>>>> Stashed changes
 
               <ul className="nav flex-column">
                 {[
