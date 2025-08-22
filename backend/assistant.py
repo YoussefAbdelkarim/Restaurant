@@ -1,72 +1,38 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-assistant.py — clean refactor
+assistant.py — Restaurant Assistant (clean rewrite)
 
 Purpose
 -------
-A single-purpose restaurant assistant that:
   1) Answers ONLY restaurant/menu/recipe/inventory questions.
-  2) If a dish exists in MongoDB -> returns it directly (no web).
-  3) If not, searches the web (DuckDuckGo) and composes a recipe via Gemini.
-     Then saves the new item into MongoDB (items collection).
-  4) Always checks the restaurant inventory (MongoDB 'ingredients' collection) and
-     tells the user whether all/none/some ingredients are available.
-  5) Uses Google Gemini as the final responder (structured prompt -> natural reply).
-  6) Automatically adds recipe ingredients to MongoDB ingredients collection.
-
-Environment
-----------
-  MONGO_URI          : MongoDB connection string (required)
-  MONGO_DB           : Optional DB name (defaults to 'test')
-  GOOGLE_API_KEY     : Gemini API key (required)
-  ASSISTANT_DEBUG    : Optional ('1' to print debug to stderr)
-
-Invocation
-----------
-  python assistant.py "<user question>"
-
-Output
-------
-  Prints a single UTF-8 string reply (what the Express route returns to the user).
+  2) If a dish exists in MongoDB -> returns it directly.
+  3) If not, searches DuckDuckGo and synthesizes a recipe via Gemini.
+  4) If web search fails, falls back to Gemini (gemini-1.5-flash).
+  5) Always checks MongoDB inventory and reports status clearly.
+  6) Strict output order: Recipe → Ingredients → Steps → Inventory.
+  7) No emojis, no manual fallback recipes.
 
 Dependencies
 -----------
   pip install google-generativeai duckduckgo_search pymongo python-dotenv
-
-Notes
------
-  • We intentionally avoid non-restaurant topics.
-  • When saving to MongoDB we align with the Mongoose schema for items, but MongoDB
-    itself won't enforce it; we try to resolve Ingredient ObjectIds by name.
-  • Automatically adds missing ingredients to inventory when providing recipes.
-  • Works directly with MongoDB database instead of JSON files.
 """
 
-from __future__ import annotations
-import os
-import re
-import sys
-import json
-import time
-import html
-import traceback
-from typing import Dict, List, Any, Tuple, Optional
-
-# Third-party
+import os, re, sys, json, traceback
+from typing import Dict, List, Any, Optional, Tuple
 from pymongo import MongoClient
 from bson import ObjectId
 
-# Load environment from backend/.env and project root .env if present
+# Load environment
 try:
     from dotenv import load_dotenv
-    _here = os.path.dirname(__file__)
-    load_dotenv(os.path.join(_here, '.env'))
-    load_dotenv(os.path.join(_here, '..', '.env'))
+    here = os.path.dirname(__file__)
+    load_dotenv(os.path.join(here, '.env'))
+    load_dotenv(os.path.join(here, '..', '.env'))
 except Exception:
     pass
 
-# DuckDuckGo search (dynamic import to avoid static lints when missing)
+# DuckDuckGo
 try:
     import importlib
     _ddg = importlib.import_module('duckduckgo_search')
@@ -80,12 +46,11 @@ try:
 except Exception:
     genai = None
 
-# --------- Config / Helpers ---------
-DEBUG = os.environ.get("ASSISTANT_DEBUG", "0") == "1"
+# Config
 MONGO_URI = os.environ.get("MONGO_URI")
 MONGO_DB = os.environ.get("MONGO_DB", "test")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-# Control side effects in DB
+DEBUG = os.environ.get("ASSISTANT_DEBUG", "0") == "1"
 AUTO_ADD_INGREDIENTS = os.environ.get("ASSISTANT_AUTO_ADD_INGREDIENTS", "0") == "1"
 AUTO_SAVE_ITEMS = os.environ.get("ASSISTANT_AUTO_SAVE_ITEMS", "0") == "1"
 
@@ -93,8 +58,7 @@ RESTAURANT_KEYWORDS = [
     "dish", "recipe", "ingredients", "prepare", "cook", "bake", "fry", "grill", "boil",
     "menu", "item", "burger", "pizza", "drink", "juice", "fries", "dessert", "pancakes",
     "sandwich", "plate", "cake", "spirits", "beverage", "order", "inventory", "stock",
-    "how much", "how many", "buckets", "oil", "water", "sold", "most requested",
-    "shake", "milk shake", "milkshake",
+    "how much", "how many", "buckets", "oil", "water", "sold", "shake"
 ]
 
 CATEGORY_GUESS = [
@@ -105,12 +69,25 @@ CATEGORY_GUESS = [
     (r"cake|dessert|pancake", "dessert"),
 ]
 
-# --------- I/O utilities ---------
+# ---------------- DB utils ----------------
 
-def log(*args: Any) -> None:
-    if DEBUG:
-        print("[assistant]", *args, file=sys.stderr)
+def mongo() -> MongoClient:
+    if not MONGO_URI:
+        raise RuntimeError("MONGO_URI missing")
+    return MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
 
+def get_collections(client: MongoClient):
+    db = client[MONGO_DB]
+    return db["ingredients"], db["items"]
+
+def fetch_inventory_map(ingredients_col) -> Dict[str, Dict[str, Any]]:
+    inv = {}
+    if ingredients_col:
+        for doc in ingredients_col.find({}):
+            name = (doc.get("name") or "").strip().lower()
+            if name:
+                inv[name] = doc
+    return inv
 
 def find_item_in_database(items_col, dish: str) -> Optional[Dict[str, Any]]:
     """Find item in MongoDB items collection by name (case-insensitive)"""
@@ -135,34 +112,6 @@ def find_item_in_database(items_col, dish: str) -> Optional[Dict[str, Any]]:
     
     return None
 
-
-# --------- MongoDB ---------
-
-def mongo() -> MongoClient:
-    if not MONGO_URI:
-        raise RuntimeError("MONGO_URI missing in environment")
-    return MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
-
-
-def get_collections(client: MongoClient):
-    db = client[MONGO_DB]
-    return db["ingredients"], db["items"]
-
-
-def fetch_inventory_map(ingredients_col) -> Dict[str, Dict[str, Any]]:
-    """Return a dict keyed by lowercased ingredient name.
-    Expected Ingredient docs to have at least: name, quantity, unit
-    """
-    inv = {}
-    if ingredients_col is None:
-        return inv
-    for doc in ingredients_col.find({}):
-        name = (doc.get("name") or "").strip().lower()
-        if name:
-            inv[name] = doc
-    return inv
-
-
 def resolve_ingredient_object_id(ingredients_col, name: str) -> Optional[ObjectId]:
     if not name:
         return None
@@ -171,7 +120,6 @@ def resolve_ingredient_object_id(ingredients_col, name: str) -> Optional[ObjectI
     n = name.strip().lower()
     doc = ingredients_col.find_one({"name": {"$regex": f"^\\s*{re.escape(n)}\\s*$", "$options": "i"}})
     return doc.get("_id") if doc else None
-
 
 def add_ingredients_to_inventory(ingredients_col, recipe_ingredients: List[Dict[str, Any]]) -> None:
     """Add recipe ingredients to MongoDB ingredients collection"""
@@ -219,238 +167,6 @@ def add_ingredients_to_inventory(ingredients_col, recipe_ingredients: List[Dict[
                 log(f"Added ingredient to MongoDB: {ing_name}")
             except Exception as e:
                 log(f"Failed to add ingredient {ing_name} to MongoDB: {e}")
-
-
-# --------- Domain helpers ---------
-
-def is_restaurant_related(query: str) -> bool:
-    q = query.lower()
-    return any(k in q for k in RESTAURANT_KEYWORDS)
-
-
-def normalize_name(s: str) -> str:
-    return re.sub(r"\s+", " ", s.strip()).lower()
-
-
-def normalize_title_for_match(s: str) -> str:
-    """Normalize names for fuzzy equality: lowercase and remove spaces/hyphens."""
-    return re.sub(r"[\s\-]+", "", (s or "").strip().lower())
-
-
-def guess_category(name: str) -> str:
-    n = name.lower()
-    for pat, cat in CATEGORY_GUESS:
-        if re.search(pat, n):
-            return cat
-    return "plate"  # default
-
-
-# --------- DuckDuckGo + Gemini recipe synthesis ---------
-
-def ddg_search_snippets(query: str, max_results: int = 5) -> List[Dict[str, str]]:
-    """Return list of {title, href, snippet}."""
-    results: List[Dict[str, str]] = []
-    if DDGS is None:
-        return results
-    try:
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results, region="wt-wt"):
-                results.append({
-                    "title": r.get("title") or "",
-                    "href": r.get("href") or "",
-                    "snippet": r.get("body") or r.get("snippet") or "",
-                })
-    except Exception as e:
-        log("DDG search error:", e)
-    return results
-
-
-def init_gemini():
-    try:
-        if genai is None:
-            return None
-        if not GOOGLE_API_KEY:
-            return None
-        getattr(genai, 'configure')(api_key=GOOGLE_API_KEY)
-        GenModel = getattr(genai, 'GenerativeModel', None)
-        if GenModel is None:
-            return None
-        return GenModel("gemini-1.5-pro")
-    except Exception:
-        return None
-
-
-GEMINI_SYSTEM = (
-    "You are a restaurant helper. You help restaurant workers with simple questions about "
-    "food, drinks, and ingredients. Use VERY SIMPLE words that any worker can understand. "
-    "Do NOT use fancy cooking terms or complicated ingredient names. For example, say "
-    "'ice cream' instead of 'vanilla extract', say 'mix' instead of 'blend', say 'cup' "
-    "instead of 'ml'. Keep recipes very simple with basic ingredients that a normal "
-    "restaurant would have. Make steps short and easy to follow. Always tell if the "
-    "restaurant has the ingredients or what is missing."
-)
-
-
-def gemini_compose_recipe_from_web(model, dish_name: str, web_snippets: List[Dict[str, str]]) -> Dict[str, Any]:
-    """Ask Gemini to synthesize a clean recipe JSON from the web snippets.
-    Returns { name, category, instructions, steps, ingredients:[{name, quantity, unit}] }
-    """
-    prompt = {
-        "role": "user",
-        "parts": [
-            {
-                "text": (
-                    f"Synthesize a reliable recipe for '{dish_name}'.\n"
-                    "Use the following web snippets (titles, snippets, URLs) as references.\n"
-                    "Return STRICT JSON with keys: name (string), category (string),"
-                    " instructions (string), steps (string[]), ingredients (array of objects"
-                    " with name (string), quantity (number), unit (string from: g, kg, l,"
-                    " piece, unit)). If you don't know exact quantities from the snippets,"
-                    " infer common standard amounts. Keep steps short, 4-10 items."
-                )
-            },
-            {"text": json.dumps(web_snippets, ensure_ascii=False)}
-        ]
-    }
-    
-    try:
-        resp = model.generate_content([
-            {"role": "system", "parts": [{"text": GEMINI_SYSTEM}]},
-            prompt,
-        ])
-        # Extract JSON payload from response text
-        text = (resp.text or "").strip()
-        # Try plain JSON first
-        data = None
-        try:
-            data = json.loads(text)
-        except Exception:
-            # Try to find a JSON block
-            m = re.search(r"\{[\s\S]*\}$", text)
-            if m:
-                try:
-                    data = json.loads(m.group(0))
-                except Exception:
-                    pass
-        if not isinstance(data, dict):
-            raise RuntimeError("Gemini did not return valid JSON for recipe synthesis")
-
-        # Normalize fields
-        data.setdefault("name", dish_name)
-        data.setdefault("category", guess_category(dish_name))
-        data.setdefault("instructions", "")
-        data.setdefault("steps", [])
-        data.setdefault("ingredients", [])
-
-        # Coerce ingredients
-        clean_ings = []
-        for ing in data.get("ingredients", []) or []:
-            name = str(ing.get("name") or "").strip()
-            if not name:
-                continue
-            qty = ing.get("quantity")
-            try:
-                qty = float(qty) if qty is not None else 0.0
-            except Exception:
-                qty = 0.0
-            unit = (ing.get("unit") or "unit").strip()
-            if unit not in {"g", "kg", "l", "piece", "unit"}:
-                unit = "unit"
-            clean_ings.append({"name": name, "quantity": qty, "unit": unit})
-        data["ingredients"] = clean_ings
-        return data
-    except Exception:
-        # If Gemini fails, return fallback
-        raise RuntimeError("Failed to generate recipe from web snippets")
-
-
-def gemini_compose_recipe_simple(model, dish_name: str) -> Dict[str, Any]:
-    """Ask Gemini directly for a clean recipe JSON without web snippets.
-    Returns { name, category, instructions, steps, ingredients:[{name, quantity, unit}] }
-    """
-    prompt = {
-        "role": "user",
-        "parts": [
-            {
-                "text": (
-                    f"Provide a simple, reliable recipe for '{dish_name}'.\n"
-                    "Return STRICT JSON with keys: name (string), category (string),"
-                    " instructions (string), steps (string[]), ingredients (array of objects"
-                    " with name (string), quantity (number), unit (one of: g, kg, l, piece, unit))."
-                    " Use very simple, common ingredients and 4-10 short steps."
-                )
-            }
-        ]
-    }
-
-    resp = model.generate_content([
-        {"role": "system", "parts": [{"text": GEMINI_SYSTEM}]},
-        prompt,
-    ])
-
-    text = (resp.text or "").strip()
-    data = None
-    try:
-        data = json.loads(text)
-    except Exception:
-        m = re.search(r"\{[\s\S]*\}$", text)
-        if m:
-            try:
-                data = json.loads(m.group(0))
-            except Exception:
-                pass
-    if not isinstance(data, dict):
-        raise RuntimeError("Gemini did not return valid JSON for simple recipe")
-
-    data.setdefault("name", dish_name)
-    data.setdefault("category", guess_category(dish_name))
-    data.setdefault("instructions", "")
-    data.setdefault("steps", [])
-    data.setdefault("ingredients", [])
-
-    # Coerce ingredients
-    clean_ings = []
-    for ing in data.get("ingredients", []) or []:
-        name = str(ing.get("name") or "").strip()
-        if not name:
-            continue
-        qty = ing.get("quantity")
-        try:
-            qty = float(qty) if qty is not None else 0.0
-        except Exception:
-            qty = 0.0
-        unit = (ing.get("unit") or "unit").strip()
-        if unit not in {"g", "kg", "l", "piece", "unit"}:
-            unit = "unit"
-        clean_ings.append({"name": name, "quantity": qty, "unit": unit})
-    data["ingredients"] = clean_ings
-    return data
-
-
-# --------- Inventory cross-check ---------
-
-def compare_with_inventory(recipe_ings: List[Dict[str, Any]], inventory_map: Dict[str, Dict[str, Any]]):
-    have_all = True
-    have_none = True
-    missing: List[str] = []
-
-    for ing in recipe_ings:
-        n = normalize_name(ing.get("name", ""))
-        if not n:
-            continue
-        if n in inventory_map:
-            have_none = False
-        else:
-            have_all = False
-            missing.append(str(ing.get("name") or "").strip())
-    status = (
-        "all" if have_all else
-        ("none" if have_none else "some")
-    )
-    return status, missing
-
-
-# --------- Persistence to DB ---------
 
 def save_item_to_mongo(items_col, ingredients_col, item: Dict[str, Any]) -> str:
     """Save item into MongoDB 'items' collection following the Mongoose schema shape.
@@ -504,72 +220,189 @@ def save_item_to_mongo(items_col, ingredients_col, item: Dict[str, Any]) -> str:
     res = items_col.insert_one(doc)
     return str(res.inserted_id)
 
+# ---------------- Helpers ----------------
 
-# --------- High-level flow ---------
+def log(*a):
+    if DEBUG:
+        print("[assistant]", *a, file=sys.stderr)
 
-def make_fallback_recipe(dish_name: str) -> Dict[str, Any]:
-    name = dish_name.strip() or "Dish"
-    cat = guess_category(name)
-    # Minimal defaults
-    ingredients = [
-        {"name": "Main ingredient", "quantity": 1.0, "unit": "unit"},
-        {"name": "Seasoning", "quantity": 1.0, "unit": "unit"},
-        {"name": "Garnish", "quantity": 1.0, "unit": "unit"},
+def normalize_name(s: str) -> str:
+    return re.sub(r"\s+", " ", s.strip()).lower()
+
+def normalize_title_for_match(s: str) -> str:
+    return re.sub(r"[\s\-]+", "", (s or "").strip().lower())
+
+def guess_category(name: str) -> str:
+    n = name.lower()
+    for pat, cat in CATEGORY_GUESS:
+        if re.search(pat, n):
+            return cat
+    return "plate"
+
+# ---------------- DuckDuckGo + Gemini ----------------
+
+def ddg_search_snippets(query: str, max_results=8):
+    results = []
+    if not DDGS: return results
+    try:
+        with DDGS() as ddgs:
+            # Search for recipe-specific content
+            search_queries = [
+                f"{query} recipe ingredients steps how to make",
+                f"{query} cooking instructions ingredients list",
+                f"{query} preparation method ingredients quantities"
+            ]
+            
+            for search_query in search_queries:
+                for r in ddgs.text(search_query, max_results=max_results//2, region="wt-wt"):
+                    # Filter for recipe-related content
+                    title = r.get("title") or ""
+                    snippet = r.get("body") or r.get("snippet") or ""
+                    
+                    # Only include results that seem recipe-related
+                    if any(keyword in title.lower() or keyword in snippet.lower() 
+                           for keyword in ["recipe", "ingredients", "instructions", "steps", "how to", "preparation"]):
+                        results.append({
+                            "title": title,
+                            "href": r.get("href") or "",
+                            "snippet": snippet,
+                        })
+                        
+                        # Avoid duplicates
+                        if len(results) >= max_results:
+                            break
+                if len(results) >= max_results:
+                    break
+                    
+    except Exception as e:
+        log("DDG error", e)
+    return results
+
+
+def init_gemini():
+    if not genai or not GOOGLE_API_KEY:
+        return None
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        return genai.GenerativeModel("gemini-1.5-pro")
+    except Exception:
+        try:
+            return genai.GenerativeModel("gemini-1.5-flash")
+        except Exception:
+            return None
+
+GEMINI_SYSTEM = (
+    "You are a restaurant helper. You help restaurant workers with specific, detailed questions about "
+    "food, drinks, and ingredients. Provide EXACT quantities and SPECIFIC ingredients. "
+    "Use precise measurements and real ingredient names. For example, say '2 cloves garlic' "
+    "instead of 'garlic', say '1 cup all-purpose flour' instead of 'flour', say '1/2 teaspoon salt' "
+    "instead of 'salt'. Provide detailed, step-by-step instructions that are easy to follow. "
+    "Always include cooking times, temperatures, and specific techniques. Make sure all "
+    "ingredients have exact quantities and appropriate units (g, kg, l, piece, unit). "
+    "Format your response clearly with Ingredients section first, then Preparation Steps, "
+    "and finally Inventory Status. Do not use emojis in your response."
+)
+
+# ---------------- Recipe synthesis ----------------
+
+def gemini_compose_recipe_from_web(model, dish: str, snippets):
+    prompt = [
+        {"role":"system","parts":[{"text":GEMINI_SYSTEM}]},
+        {"role":"user","parts":[{"text":f"Create a DETAILED and SPECIFIC recipe for '{dish}' based on the web search results.\n"
+                                 "Use the following web snippets as references to create an accurate recipe.\n"
+                                 "Return STRICT JSON with keys: name (string), category (string),"
+                                 " instructions (string), steps (string[]), ingredients (array of objects"
+                                 " with name (string), quantity (number), unit (string from: g, kg, l,"
+                                 " piece, unit)).\n\n"
+                                 "IMPORTANT REQUIREMENTS:\n"
+                                 "- Use EXACT quantities from the web sources when available\n"
+                                 "- Include SPECIFIC ingredient names (e.g., 'extra virgin olive oil' not just 'oil')\n"
+                                 "- Provide detailed steps with cooking times and temperatures\n"
+                                 "- Include 6-12 detailed steps with specific instructions\n"
+                                 "- Use precise measurements (e.g., 2.5 g, 0.5 l, 3 pieces)\n"
+                                 "- Make sure all ingredients have realistic quantities\n"
+                                 "- If web sources don't provide exact amounts, use standard recipe quantities\n\n"
+                                 f"Web snippets:\n{json.dumps(snippets)}"}]}
     ]
-    steps = [
-        "Prepare ingredients",
-        "Cook appropriately",
-        "Assemble and plate",
-        "Serve",
+    resp = model.generate_content(prompt)
+    return parse_gemini_json(resp.text, dish)
+
+def gemini_compose_recipe_simple(model, dish: str):
+    prompt = [
+        {"role":"system","parts":[{"text":GEMINI_SYSTEM}]},
+        {"role":"user","parts":[{"text":f"Create a DETAILED and SPECIFIC recipe for '{dish}'.\n"
+                                 "Return STRICT JSON with keys: name (string), category (string),"
+                                 " instructions (string), steps (string[]), ingredients (array of objects"
+                                 " with name (string), quantity (number), unit (one of: g, kg, l, piece, unit)).\n\n"
+                                 "IMPORTANT REQUIREMENTS:\n"
+                                 "- Use EXACT quantities and SPECIFIC ingredient names\n"
+                                 "- Include detailed steps with cooking times and temperatures\n"
+                                 "- Provide 6-12 detailed steps with specific instructions\n"
+                                 "- Use precise measurements (e.g., 2.5 g, 0.5 l, 3 pieces)\n"
+                                 "- Make sure all ingredients have realistic quantities\n"
+                                 "- Include cooking techniques and specific instructions"}]}
     ]
+    resp = model.generate_content(prompt)
+    return parse_gemini_json(resp.text, dish)
+
+def parse_gemini_json(txt: str, dish: str):
+    try:
+        data = json.loads(txt)
+    except Exception:
+        # Try to find JSON block in the response
+        m = re.search(r"\{[\s\S]*\}", txt)
+        if m:
+            try:
+                data = json.loads(m.group(0))
+            except Exception:
+                data = {}
+        else:
+            data = {}
+    
+    if not isinstance(data, dict):
+        log(f"Failed to parse JSON for {dish}, got: {txt[:200]}...")
+        return {"name": dish, "category": guess_category(dish), "ingredients": [], "steps": []}
+
+    clean_ings = []
+    for ing in data.get("ingredients", []) or []:
+        name = str(ing.get("name") or "").strip()
+        if not name: continue
+        try: 
+            qty = float(ing.get("quantity",0))
+        except: 
+            qty = 0.0
+        unit = (ing.get("unit") or "unit").strip()
+        if unit not in {"g","kg","l","ml","piece","unit"}: 
+            unit = "unit"
+        clean_ings.append({"name": name, "quantity": qty, "unit": unit})
+
+    steps = data.get("steps", []) or []
+    if not steps and data.get("instructions"):
+        # If no steps but instructions exist, split instructions into steps
+        instructions = data.get("instructions", "")
+        steps = [s.strip() for s in instructions.split('.') if s.strip()]
+
     return {
-        "name": name,
-        "category": cat,
-        "ingredients": ingredients,
-        "steps": steps,
-        "instructions": "\n".join(steps),
+        "name": data.get("name", dish),
+        "category": data.get("category", guess_category(dish)),
+        "ingredients": clean_ings,
+        "steps": [str(s) for s in steps]
     }
 
+# ---------------- Inventory ----------------
 
-def get_curated_recipe(dish_name: str) -> Optional[Dict[str, Any]]:
-    """Return a simple curated recipe for common dishes when AI/DB are unavailable."""
-    n = (dish_name or "").strip().lower()
-    if not n:
-        return None
-    if "indian curry" in n or n == "curry" or "chicken curry" in n or "vegetable curry" in n:
-        # Units constrained to {g, kg, l, piece, unit}
-        ingredients = [
-            {"name": "oil", "quantity": 2.0, "unit": "unit"},
-            {"name": "onion", "quantity": 1.0, "unit": "piece"},
-            {"name": "garlic", "quantity": 3.0, "unit": "piece"},
-            {"name": "ginger", "quantity": 1.0, "unit": "piece"},
-            {"name": "tomato", "quantity": 2.0, "unit": "piece"},
-            {"name": "curry powder", "quantity": 2.0, "unit": "unit"},
-            {"name": "turmeric", "quantity": 1.0, "unit": "unit"},
-            {"name": "cumin", "quantity": 1.0, "unit": "unit"},
-            {"name": "salt", "quantity": 1.0, "unit": "unit"},
-            {"name": "black pepper", "quantity": 1.0, "unit": "unit"},
-            {"name": "water", "quantity": 0.3, "unit": "l"},
-        ]
-        steps = [
-            "Heat oil in a pot.",
-            "Add chopped onion; cook until soft.",
-            "Add minced garlic and grated ginger; cook briefly.",
-            "Add curry powder, turmeric, and cumin; stir 30 seconds.",
-            "Add chopped tomato; cook until soft and saucy.",
-            "Add water and simmer 5–10 minutes.",
-            "Season with salt and pepper; simmer to desired thickness.",
-            "Serve with rice or bread.",
-        ]
-        return {
-            "name": "Indian Curry",
-            "category": "plate",
-            "ingredients": ingredients,
-            "steps": steps,
-            "instructions": "\n".join(steps),
-        }
-    return None
-
+def compare_with_inventory(recipe_ings, inventory_map):
+    have_all, have_none, missing = True, True, []
+    for ing in recipe_ings:
+        n = normalize_name(ing.get("name",""))
+        if not n: continue
+        if n in inventory_map:
+            have_none = False
+        else:
+            have_all = False
+            missing.append(ing.get("name",""))
+    status = "all" if have_all else ("none" if have_none else "some")
+    return status, missing
 
 def handle_inventory_question(query: str, inventory_map: Dict[str, Dict[str, Any]]) -> Optional[str]:
     """Handle questions like 'how much water do I have' or 'oil buckets'."""
@@ -613,161 +446,64 @@ def handle_inventory_question(query: str, inventory_map: Dict[str, Dict[str, Any
     unit = (doc.get("unit") or "unit")
     return f"Inventory: {doc.get('name')} — {qty} {unit}."
 
+# ---------------- Format answer ----------------
 
-def build_final_answer_with_gemini(model, user_query: str, recipe: Optional[Dict[str, Any]], inv_status: Tuple[str, List[str]], db_summary: Dict[str, Any]) -> str:
-    status, missing = inv_status
-    context_parts = []
+def create_basic_recipe(dish_name: str) -> Dict[str, Any]:
+    """Create a minimal recipe structure when all else fails."""
+    name = dish_name.strip() or "Dish"
+    return {
+        "name": name,
+        "category": guess_category(name),
+        "ingredients": [],
+        "steps": []
+    }
 
-    if recipe:
-        context_parts.append({
-            "recipe": {
-                "name": recipe.get("name"),
-                "category": recipe.get("category"),
-                "ingredients": recipe.get("ingredients", []),
-                "steps": recipe.get("steps", []),
-                "instructions": recipe.get("instructions", "")
-            }
-        })
+def build_final_answer(recipe, status_tuple):
+    status, missing = status_tuple
+    lines = []
+    lines.append(f"**{recipe.get('name','Recipe')}**")
+    lines.append(f"**Category:** {recipe.get('category','plate').title()}")
 
-    context_parts.append({
-        "inventory_check": {
-            "status": status,
-            "missing": missing,
-        }
-    })
+    lines.append("\n**Ingredients:**")
+    for ing in recipe.get("ingredients",[]):
+        lines.append(f"- {ing['quantity']} {ing['unit']} {ing['name']}")
 
-    context_parts.append({"db_summary": db_summary})
+    lines.append("\n**Preparation Steps:**")
+    for i,s in enumerate(recipe.get("steps",[]),1):
+        lines.append(f"{i}. {s}")
 
-    # If model unavailable, produce a plain formatted answer
-    if model is None:
-        lines_fallback: List[str] = []
-        if recipe:
-            lines_fallback.append(f"**{recipe.get('name', 'Recipe').title()}**")
-            lines_fallback.append("\n**Ingredients:**")
-            for ing in recipe.get('ingredients', []) or []:
-                nm = str(ing.get('name') or '').strip()
-                qty = ing.get('quantity')
-                try:
-                    qty = float(qty) if qty is not None else 0.0
-                except Exception:
-                    qty = 0.0
-                unit = str(ing.get('unit') or 'unit')
-                lines_fallback.append(f"- {qty} {unit} {nm}")
-            steps = recipe.get('steps') or []
-            if steps:
-                lines_fallback.append("\n**Steps:**")
-                for i, s in enumerate(steps, 1):
-                    lines_fallback.append(f"{i}. {s}")
-            instr = str(recipe.get('instructions') or '').strip()
-            if instr and not steps:
-                lines_fallback.append("\n**Instructions:**")
-                lines_fallback.append(instr)
-        lines_fallback.append("\n**Inventory status:**")
-        if status == 'all':
-            lines_fallback.append("All ingredients available.")
-        elif status == 'none':
-            lines_fallback.append("No required ingredients are currently in stock.")
-        else:
-            lines_fallback.append("Missing: " + ", ".join(missing))
-        return "\n".join(lines_fallback)
+    lines.append("\n**Inventory Status:**")
+    if status=="all":
+        lines.append("All ingredients are available.")
+    elif status=="none":
+        lines.append("No ingredients available, reorder required.")
+    else:
+        lines.append(f"Some ingredients missing: {', '.join(missing)}. You should reorder.")
 
-    try:
-        resp = model.generate_content([
-            {"role": "system", "parts": [{"text": GEMINI_SYSTEM}]},
-            {"role": "user", "parts": [
-                {"text": f"User question: {user_query}"},
-                {"text": "Context:"},
-                {"text": json.dumps(context_parts, ensure_ascii=False)}
-            ]}
-        ])
-        return (resp.text or "").strip()
-    except Exception:
-        # Graceful fallback: return the plain formatted answer
-        lines: List[str] = []
-        if recipe:
-            lines.append(f"**{recipe.get('name', 'Recipe').title()}**")
-            lines.append("\n**Ingredients:**")
-            for ing in recipe.get('ingredients', []) or []:
-                nm = str(ing.get('name') or '').strip()
-                qty = ing.get('quantity')
-                try:
-                    qty = float(qty) if qty is not None else 0.0
-                except Exception:
-                    qty = 0.0
-                unit = str(ing.get('unit') or 'unit')
-                lines.append(f"- {qty} {unit} {nm}")
-            steps = recipe.get('steps') or []
-            if steps:
-                lines.append("\n**Steps:**")
-                for i, s in enumerate(steps, 1):
-                    lines.append(f"{i}. {s}")
-            instr = str(recipe.get('instructions') or '').strip()
-            if instr and not steps:
-                lines.append("\n**Instructions:**")
-                lines.append(instr)
-        lines.append("\n**Inventory status:**")
-        if status == 'all':
-            lines.append("All ingredients available.")
-        elif status == 'none':
-            lines.append("No required ingredients are currently in stock.")
-        else:
-            lines.append("Missing: " + ", ".join(missing))
-        return "\n".join(lines)
+    return "\n".join(lines)
 
-
-def summarize_db_state(items_col) -> Dict[str, Any]:
-    if items_col is None:
-        return {"total_items": None, "top_sold": []}
-    try:
-        total_items = items_col.count_documents({})
-        top = items_col.find({}).sort("soldCount", -1).limit(5)
-        top_names = [d.get("name") for d in top]
-        return {"total_items": total_items, "top_sold": top_names}
-    except Exception:
-        return {"total_items": None, "top_sold": []}
-
+# ---------------- Main ----------------
 
 def main(user_query: str) -> str:
-    if not is_restaurant_related(user_query):
-        return (
-            "I can help only with restaurant topics: menu items, recipes, ingredients, "
-            "inventory quantities, or popular dishes. Try asking about a dish, how to "
-            "prepare it, or what we have in stock."
-        )
+    if not any(k in user_query.lower() for k in RESTAURANT_KEYWORDS):
+        return "I only handle restaurant questions (recipes, ingredients, inventory)."
 
-    # Init services
-    # Try to connect to DB, but continue gracefully if unavailable
-    client = None
+    # DB
     try:
-        client = mongo()
-        try:
-            client.admin.command('ping')
-        except Exception as e:
-            raise RuntimeError(f"MongoDB connection failed: {e}")
-    except Exception as e:
-        log("DB unavailable, continuing in no-DB mode:", e)
-        client = None
-
-    if client is not None:
+        client = mongo(); client.admin.command('ping')
         ingredients_col, items_col = get_collections(client)
-    else:
-        ingredients_col, items_col = None, None
-    model = init_gemini()
+    except Exception:
+        ingredients_col, items_col, client = None, None, None
+
     inventory_map = fetch_inventory_map(ingredients_col)
+    model = init_gemini()
 
     # Pure inventory question?
     inv_reply = handle_inventory_question(user_query, inventory_map)
     if inv_reply:
-        # Edge case: still let Gemini stylize the response
-        return build_final_answer_with_gemini(
-            model,
-            user_query,
-            None,
-            ("n/a", []),
-            summarize_db_state(items_col)
-        ) + f"\n\n{inv_reply}"
+        return inv_reply
 
-    # Try to detect a dish/recipe name (heuristic: look for 'for <dish>' / 'of <dish>' / trailing subject)
+    # Try to detect a dish/recipe name
     def find_dish_name_from_query(q: str) -> Optional[str]:
         ql = q.lower()
         # common patterns
@@ -808,35 +544,42 @@ def main(user_query: str) -> str:
                 structured_ings.append({"name": str(ing), "quantity": 0.0, "unit": "unit"})
         recipe["ingredients"] = structured_ings
 
-        # Add recipe ingredients to inventory.json and MongoDB
+        # Add recipe ingredients to inventory
         add_ingredients_to_inventory(ingredients_col, recipe["ingredients"])
 
         status = compare_with_inventory(recipe["ingredients"], inventory_map)
-        return build_final_answer_with_gemini(
-            model,
-            user_query,
-            recipe,
-            status,
-            summarize_db_state(items_col)
-        )
+        return build_final_answer(recipe, status)
 
-    # 2) Not found in database -> Web search + Gemini synthesis (or fallback)
-    ddg_snippets = ddg_search_snippets(f"{dish} recipe ingredients steps") or []
+    # 2) Not found in database -> Web search + Gemini synthesis
+    ddg_snippets = ddg_search_snippets(dish)
     if model is not None:
         try:
-            recipe = gemini_compose_recipe_from_web(model, dish, ddg_snippets)
-        except Exception:
-            try:
-                # Fallback to a direct Gemini JSON recipe without web snippets
+            # First try to get recipe from web search
+            if ddg_snippets:
+                recipe = gemini_compose_recipe_from_web(model, dish, ddg_snippets)
+            else:
+                # If no web results, use Gemini's own knowledge
                 recipe = gemini_compose_recipe_simple(model, dish)
-            except Exception:
-                recipe = get_curated_recipe(dish) or make_fallback_recipe(dish)
+        except Exception as e:
+            log(f"Web search failed for {dish}: {e}")
+            # If web search fails, use Gemini's own knowledge
+            try:
+                recipe = gemini_compose_recipe_simple(model, dish)
+            except Exception as e2:
+                log(f"Gemini simple recipe failed for {dish}: {e2}")
+                # Last resort: return error message
+                return f"Sorry, I couldn't generate a recipe for '{dish}'. Please try a different dish or check your internet connection."
     else:
-        recipe = get_curated_recipe(dish) or make_fallback_recipe(dish)
+        # No model available - return error message
+        return f"Sorry, I couldn't generate a recipe for '{dish}'. The AI service is currently unavailable."
 
-    # Save to MongoDB (best-effort)
+    # Always save new recipe to MongoDB and add ingredients to inventory
     try:
-        save_item_to_mongo(items_col, ingredients_col, recipe)
+        item_id = save_item_to_mongo(items_col, ingredients_col, recipe)
+        if item_id:
+            log(f"Successfully saved recipe '{dish}' to database with ID: {item_id}")
+        else:
+            log(f"Recipe '{dish}' already exists in database or save was skipped")
     except Exception as _e:
         log("Mongo save item failed:", _e)
 
@@ -845,20 +588,10 @@ def main(user_query: str) -> str:
 
     # Inventory check
     status = compare_with_inventory(recipe.get("ingredients", []), inventory_map)
-
-    # Final answer via Gemini
-    return build_final_answer_with_gemini(
-        model,
-        user_query,
-        recipe,
-        status,
-        summarize_db_state(items_col)
-    )
-
+    return build_final_answer(recipe, status)
 
 if __name__ == "__main__":
     try:
-        # Default: treat argument as a user question
         if len(sys.argv) < 2:
             print("Please provide a user question as a single argument.")
             sys.exit(1)
@@ -866,21 +599,12 @@ if __name__ == "__main__":
         reply = main(query)
         print(reply)
     except Exception as e:
-        # Graceful fallback instead of generic error line
+        # Graceful fallback
         if DEBUG:
             traceback.print_exc()
         try:
             query = sys.argv[1].strip() if len(sys.argv) > 1 else "Dish"
         except Exception:
             query = "Dish"
-        fallback_recipe = make_fallback_recipe(query)
-        # No DB, no inventory when in failure path
-        safe_reply = build_final_answer_with_gemini(
-            None,
-            query,
-            fallback_recipe,
-            ("none", []),
-            {"total_items": None, "top_sold": []}
-        )
-        print(safe_reply)
-        sys.exit(0)
+        print(f"Sorry, I couldn't process your request for '{query}'. Please try again or ask about a different dish.")
+        sys.exit(1)
