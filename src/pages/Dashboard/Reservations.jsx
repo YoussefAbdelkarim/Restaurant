@@ -241,7 +241,6 @@ export default function Reservations() {
           </Col>
         </Row>
       )} */}
-      )}
 
       {/* Filters */}
       <Card className="mb-4">
