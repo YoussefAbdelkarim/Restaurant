@@ -7,6 +7,7 @@ import ValidFeedback from './ValidFeedback';
 import InvalidFeedback from './InvalidFeedback';
 import { motion } from 'framer-motion';
 import '../button.css';
+import axios from 'axios';
 
 function ContactForm() {
     const [firstName, setFirstName] = useState('');
@@ -17,10 +18,12 @@ function ContactForm() {
     const [numberOfGuests, setNumberOfGuests] = useState('');
     const [comments, setComments] = useState('');
     const [validated, setValidated] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
+    const [submitError, setSubmitError] = useState('');
 
     const todayDate = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
 
-    const handleSubmit = (event) => {
+    const handleSubmit = async (event) => {
         const form = event.currentTarget;
         if (form.checkValidity() === false) {
             event.preventDefault();
@@ -28,26 +31,49 @@ function ContactForm() {
         } else {
             event.preventDefault();
             event.stopPropagation();
+            setSubmitting(true);
+            setSubmitError('');
 
-            document.getElementById('results').innerHTML = `
-                <div class="modal" id="modal">
-                    <div class="modal-dialog d-flex align-items-center">
-                        <div class="modal-content rounded-0">
-                            <div class="modal-header">
-                                <h5 class="modal-title">Thank You!</h5>
-                            </div>
-                            <div class="modal-body">
-                                <p>Dear ${firstName} ${lastName},</p>
-                                <p>Thank you for your reservation for ${numberOfGuests} people on ${date}. You will receive a confirmation email shortly on ${emailAddress}.</p>
-                                <p>See you soon!</p>
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-success btn-lg rounded-0" data-bs-dismiss="modal" onClick="window.location.reload()">Close</button>
+            try {
+                // Save reservation to database
+                const reservationData = {
+                    firstName,
+                    lastName,
+                    phoneNumber,
+                    emailAddress,
+                    date: new Date(date).toISOString(),
+                    numberOfGuests: parseInt(numberOfGuests),
+                    comments
+                };
+
+                await axios.post('/api/reservations', reservationData);
+
+                // Show success modal
+                document.getElementById('results').innerHTML = `
+                    <div class="modal" id="modal">
+                        <div class="modal-dialog d-flex align-items-center">
+                            <div class="modal-content rounded-0">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Thank You!</h5>
+                                </div>
+                                <div class="modal-body">
+                                    <p>Dear ${firstName} ${lastName},</p>
+                                    <p>Thank you for your reservation for ${numberOfGuests} people on ${date}. You will receive a confirmation email shortly on ${emailAddress}.</p>
+                                    <p>See you soon!</p>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-success btn-lg rounded-0" data-bs-dismiss="modal" onClick="window.location.reload()">Close</button>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            `;
+                `;
+            } catch (error) {
+                console.error('Error submitting reservation:', error);
+                setSubmitError(error.response?.data?.message || 'Failed to submit reservation. Please try again.');
+            } finally {
+                setSubmitting(false);
+            }
         }
         setValidated(true);
     };
@@ -180,8 +206,20 @@ function ContactForm() {
                     />
                 </Form.Group>
 
-                <Button variant="primary" type="submit" className='custom-btn' id="submit-btn">
-                    Submit
+                {submitError && (
+                    <div className="alert alert-danger mb-3" role="alert">
+                        {submitError}
+                    </div>
+                )}
+                
+                <Button 
+                    variant="primary" 
+                    type="submit" 
+                    className='custom-btn' 
+                    id="submit-btn"
+                    disabled={submitting}
+                >
+                    {submitting ? 'Submitting...' : 'Submit'}
                 </Button>
             </Form>
 

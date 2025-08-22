@@ -207,6 +207,7 @@ export default function Reservations() {
 
       {/* Statistics Cards */}
       {/* {stats && (
+      {stats && (
         <Row className="mb-4">
           <Col md={3}>
             <Card className="text-center">
@@ -240,6 +241,7 @@ export default function Reservations() {
           </Col>
         </Row>
       )} */}
+      )}
 
       {/* Filters */}
       <Card className="mb-4">
